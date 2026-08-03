@@ -1,0 +1,7 @@
+.paper-reader-data/
+论文库/
+node_modules/
+.DS_Store
+*.docx
+*.pyc
+__pycache__/

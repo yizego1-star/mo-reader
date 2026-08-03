@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c332a" />
+    <title>墨读 · 论文精读</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="论文导航">
+        <div class="brand-mark"><span class="brand-dot"></span><span>墨读</span></div>
+        <div class="brand-caption">PAPER READER</div>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <button class="nav-item active" data-view="library">
+            <span class="nav-icon">▦</span><span>论文库</span><span class="nav-count" id="paper-count">0</span>
+          </button>
+          <button class="nav-item" data-view="vocabulary">
+            <span class="nav-icon">⌁</span><span>生词本</span><span class="nav-count" id="vocab-count">0</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-section-label">最近阅读</div>
+        <div class="recent-list" id="recent-list"></div>
+
+        <div class="sidebar-footer">
+          <div class="status-line"><span class="status-dot"></span><span>本地资料库已连接</span></div>
+          <button class="quiet-button" id="settings-button"><span>⚙</span><span>阅读设置</span></button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumb"><span>我的论文</span><span class="crumb-slash">/</span><span id="topbar-context">论文库</span></div>
+          <div class="topbar-actions">
+            <button class="icon-button" id="search-button" aria-label="搜索论文">⌕</button>
+            <button class="profile-chip" aria-label="用户资料"><span>Z</span></button>
+          </div>
+        </header>
+
+        <section class="view library-view" id="library-view">
+          <div class="page-intro">
+            <div>
+              <div class="eyebrow">YOUR RESEARCH LIBRARY</div>
+              <h1>把论文读进去。</h1>
+              <p>保留原文的精读空间，也让每一个没读懂的地方都有回应。</p>
+            </div>
+            <div class="intro-actions">
+              <button class="secondary-button" id="refresh-library"><span>↻</span> 刷新论文库</button>
+              <button class="primary-button" id="open-current"><span>开始阅读</span><span class="button-arrow">→</span></button>
+            </div>
+          </div>
+
+          <div class="library-strip">
+            <div class="library-stat"><span class="stat-number" id="stat-papers">0</span><span class="stat-label">篇论文</span></div>
+            <div class="library-divider"></div>
+            <div class="library-stat"><span class="stat-number" id="stat-words">0</span><span class="stat-label">个生词</span></div>
+            <div class="library-divider"></div>
+            <div class="library-stat wide"><span class="stat-number">AI</span><span class="stat-label">随选随译</span></div>
+            <div class="strip-note"><span class="note-dot"></span> 原文始终保持不变</div>
+          </div>
+
+          <div class="section-heading">
+            <div><h2>全部论文</h2><p>放入这个文件夹的 PDF 会自动出现在这里。</p></div>
+            <div class="view-toggle"><button class="view-toggle-button selected">▦</button><button class="view-toggle-button">≡</button></div>
+          </div>
+          <div class="paper-grid" id="paper-grid"></div>
+        </section>
+
+        <section class="view reader-view hidden" id="reader-view">
+          <div class="reader-toolbar">
+            <button class="back-button" id="back-to-library">← <span>论文库</span></button>
+            <div class="reader-title-wrap"><div class="reader-kicker">正在阅读</div><h1 id="reader-title">—</h1></div>
+            <div class="reader-actions">
+              <div class="paper-search" id="paper-search">
+                <span class="paper-search-icon">⌕</span>
+                <input id="paper-search-input" type="search" autocomplete="off" placeholder="查词或文中搜索" aria-label="查词或文中搜索">
+                <button id="paper-search-submit" type="button" aria-label="搜索">↵</button>
+                <div class="paper-search-results hidden" id="paper-search-results"></div>
+              </div>
+              <button class="toolbar-button" id="reader-vocab"><span>⌁</span> 生词本</button>
+              <button class="toolbar-button filled" id="reader-settings">Aa</button>
+            </div>
+          </div>
+          <div class="reader-layout">
+            <div class="pdf-column">
+              <div class="reading-tip"><span class="tip-icon">✦</span><span>选中英文即可查看中文意思。选中多句、多段也可以。</span><button id="dismiss-tip" aria-label="关闭提示">×</button></div>
+              <div class="pdf-scroll" id="pdf-scroll" aria-label="PDF 阅读区"></div>
+              <div class="reader-loading" id="reader-loading"><div class="loading-spinner"></div><span>正在打开论文…</span></div>
+            </div>
+            <aside class="reader-side-panel">
+              <div class="side-panel-card abstract-card">
+                <div class="side-card-label">论文速览</div>
+                <h2 id="side-paper-title">—</h2>
+                <p id="side-paper-summary">—</p>
+                <div class="side-meta"><span id="side-page-count">—</span><span class="meta-separator">·</span><span>PDF 原文</span></div>
+              </div>
+              <div class="side-panel-card study-card">
+                <div class="side-card-label">精读方法</div>
+                <div class="study-step"><span>01</span><div><strong>先读原文</strong><p>不要急着翻译，先建立整体语境。</p></div></div>
+                <div class="study-step"><span>02</span><div><strong>再选中理解</strong><p>单词看词性，句子看完整意思。</p></div></div>
+                <div class="study-step"><span>03</span><div><strong>留下生词</strong><p>点击加入生词本，之后集中复习。</p></div></div>
+              </div>
+            </aside>
+          </div>
+          <div class="explain-popover hidden" id="explain-popover" role="dialog" aria-live="polite">
+            <div class="popover-head"><div><span class="popover-type" id="popover-type">句意</span><span class="popover-status" id="popover-status">正在理解…</span></div><button class="popover-close" id="close-popover">×</button></div>
+            <textarea class="selection-quote selection-editor" id="selection-quote" spellcheck="false" aria-label="要翻译的英文"></textarea>
+            <div class="popover-result" id="popover-result"><div class="popover-skeleton"></div></div>
+            <div class="popover-actions" id="popover-actions"><button class="popover-action" id="retranslate-selection">重新翻译</button></div>
+          </div>
+        </section>
+
+        <section class="view vocab-view hidden" id="vocabulary-view">
+          <div class="page-intro compact-intro">
+            <div><div class="eyebrow">YOUR WORD BANK</div><h1>生词本。</h1><p>把阅读中真正遇到的词留下来，慢慢变成熟悉的词。</p></div>
+          </div>
+          <div class="vocab-summary"><div><span class="vocab-big-number" id="vocab-total">0</span><span>个词汇</span></div><div class="vocab-summary-note">来自你的论文阅读</div></div>
+          <div class="vocab-toolbar" id="vocab-toolbar">
+            <span class="vocab-selection-summary" id="vocab-selection-summary">已选 0 天</span>
+            <div class="vocab-toolbar-actions">
+              <button class="vocab-tool-button" id="vocab-select-all" type="button">全选</button>
+              <button class="vocab-tool-button" id="vocab-select-none" type="button">全不选</button>
+              <button class="vocab-tool-button primary" id="vocab-export" type="button" disabled>导出 Word</button>
+            </div>
+          </div>
+          <div class="vocab-list" id="vocab-list"></div>
+        </section>
+      </main>
+    </div>
+    <div class="toast hidden" id="toast"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "paper-reader",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "dependencies": {
+    "pdfjs-dist": "^4.10.38"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
