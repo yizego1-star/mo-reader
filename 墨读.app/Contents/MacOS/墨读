@@ -1,0 +1,4 @@
+#!/bin/zsh
+
+APP_DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
+exec "$APP_DIR/启动墨读.command"
