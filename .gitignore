@@ -6,3 +6,4 @@ node_modules/
 *.pyc
 __pycache__/
 启动墨读.command
+墨读.app/
