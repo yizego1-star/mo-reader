@@ -231,6 +231,8 @@ function formatDictionaryPos(pos) {
     conj: "连词",
     aux: "助动词",
     int: "感叹词",
+    art: "冠词",
+    article: "冠词",
   };
   const values = String(pos || "")
     .split(/[\s/]+/)
@@ -242,7 +244,7 @@ function formatDictionaryPos(pos) {
 
 function inferDictionaryPos(entry) {
   if (entry.posLabel && entry.posLabel !== "语境词性") return entry.posLabel;
-  const match = `${entry.translation || ""}\n${entry.definition || ""}`.match(/(?:^|\n)\s*(n|v|a|s|ad|adv|prep|pron|conj|aux|int)\./i);
+  const match = `${entry.translation || ""}\n${entry.definition || ""}`.match(/(?:^|\n)\s*(n|v|a|s|ad|adv|prep|pron|conj|aux|int|art|article)\./i);
   return match ? formatDictionaryPos(match[1]) : "语境词性";
 }
 
@@ -280,6 +282,20 @@ async function localTranslation(text, type) {
         mode: entry.translation ? "local-dictionary" : "local",
         provider: entry.translation ? "本地英汉词典" : undefined,
       };
+    }
+    try {
+      const meaning = await localModelTranslation(text);
+      if (meaning && meaning.toLowerCase() !== word) {
+        return {
+          pos: "根据语境判断",
+          meaning,
+          audio: pronunciationAudio(word),
+          mode: "local-model",
+          provider: "本地 Argos Translate",
+        };
+      }
+    } catch (error) {
+      console.warn("Local word translation unavailable:", error.message);
     }
     return {
       pos: "根据语境判断",
@@ -490,14 +506,18 @@ function isPlaceholderTranslation(result) {
 async function translate(text, type) {
   const cache = await readJson(TRANSLATION_CACHE_FILE, {});
   const key = `${type}:${text.trim().toLowerCase()}`;
-  if (cache[key] && !isPlaceholderTranslation(cache[key])) {
-    const cached = { ...cache[key], cached: true };
+  const offline = process.env.PAPER_READER_OFFLINE === "1";
+  const cached = cache[key];
+  const staleLocalPlaceholder = cached?.mode === "local" && !cached?.provider;
+  const cachedOnline = cached?.mode === "online" || cached?.mode === "remote";
+  if (cached && !isPlaceholderTranslation(cached) && !staleLocalPlaceholder && !(offline && cachedOnline)) {
+    const cachedResult = { ...cached, cached: true };
     if (type === "word") {
-      cached.audio = pronunciationAudio(text);
-      cache[key] = cached;
+      cachedResult.audio = pronunciationAudio(text);
+      cache[key] = cachedResult;
       await writeJson(TRANSLATION_CACHE_FILE, cache);
     }
-    return cached;
+    return cachedResult;
   }
   let result;
   if (type === "sentence" && process.env.PAPER_READER_OFFLINE !== "0") {

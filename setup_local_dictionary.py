@@ -24,6 +24,8 @@ POS_LABELS = {
     "conj": "连词",
     "aux": "助动词",
     "int": "感叹词",
+    "art": "冠词",
+    "article": "冠词",
 }
 
 
@@ -64,7 +66,7 @@ def main():
                 continue
             detected_pos = pos_label(row.get("pos"))
             if detected_pos == "语境词性":
-                match = re.match(r"^(n|v|a|s|ad|adv|prep|pron|conj|aux|int)\.\s*", raw_translation, flags=re.I)
+                match = re.match(r"^(n|v|a|s|ad|adv|prep|pron|conj|aux|int|art|article)\.\s*", raw_translation, flags=re.I)
                 if match:
                     detected_pos = POS_LABELS.get(match.group(1).lower(), "语境词性")
             buckets[word[0]][word] = {
