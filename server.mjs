@@ -673,5 +673,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Paper Reader is running at http://127.0.0.1:${PORT}`);
-  console.log(`Translation: ${process.env.PAPER_READER_AI_KEY && process.env.PAPER_READER_AI_URL ? "remote AI + online fallback + local dictionary" : "online fallback + local dictionary"}`);
+  console.log(`Translation: ${process.env.PAPER_READER_AI_KEY && process.env.PAPER_READER_AI_URL ? "remote AI + local model + online fallback" : "local model + online fallback + local dictionary"}`);
 });
