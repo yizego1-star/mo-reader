@@ -549,6 +549,7 @@ function renderExplanation(result, selected) {
     els.popoverResult.innerHTML = `
       <span class="result-label">词性</span>
       <span class="word-pos">${escapeHtml(result.pos || "语境词性")}</span>
+      ${result.phonetic ? `<span class="result-label">音标</span><span class="word-pos phonetic">${escapeHtml(result.phonetic)}</span>` : ""}
       <span class="result-label">完整意思</span>
       <div class="result-meaning">${escapeHtml(result.meaning || "暂无释义")}</div>
       ${result.example ? `<div class="result-note">例句：${escapeHtml(result.example)}</div>` : ""}
