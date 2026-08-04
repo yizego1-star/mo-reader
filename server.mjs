@@ -13,6 +13,8 @@ const DATA_DIR = path.join(APP_ROOT, ".paper-reader-data");
 const VOCAB_FILE = path.join(DATA_DIR, "vocabulary.json");
 const TRANSLATION_CACHE_FILE = path.join(DATA_DIR, "translation-cache.json");
 const SUMMARY_CACHE_FILE = path.join(DATA_DIR, "summary-cache.json");
+const LOCAL_DICTIONARY_DIR = path.join(DATA_DIR, "dictionary");
+const LOCAL_DICTIONARY_CACHE = new Map();
 const EXPORT_SCRIPT = path.join(APP_ROOT, "export_vocab.py");
 const PYTHON_BIN = process.env.PAPER_READER_PYTHON || "python3";
 const PORT = Number(process.env.PAPER_READER_PORT || 4317);
@@ -85,6 +87,7 @@ async function exists(filePath) {
 async function ensureDataFiles() {
   await fs.mkdir(PAPERS_DIR, { recursive: true });
   await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.mkdir(LOCAL_DICTIONARY_DIR, { recursive: true });
   if (!(await exists(VOCAB_FILE))) await fs.writeFile(VOCAB_FILE, "[]\n", "utf8");
   if (!(await exists(TRANSLATION_CACHE_FILE))) await fs.writeFile(TRANSLATION_CACHE_FILE, "{}\n", "utf8");
   if (!(await exists(SUMMARY_CACHE_FILE))) await fs.writeFile(SUMMARY_CACHE_FILE, "{}\n", "utf8");
@@ -212,6 +215,46 @@ function normalizeWord(text) {
   return text.toLowerCase().replace(/^[^a-z]+|[^a-z]+$/gi, "");
 }
 
+function formatDictionaryPos(pos) {
+  const labels = {
+    n: "名词",
+    v: "动词",
+    a: "形容词",
+    s: "形容词",
+    ad: "副词",
+    adv: "副词",
+    prep: "介词",
+    pron: "代词",
+    conj: "连词",
+    aux: "助动词",
+    int: "感叹词",
+  };
+  const values = String(pos || "")
+    .split(/[\s/]+/)
+    .map((value) => value.replace(/\.$/, "").toLowerCase())
+    .filter(Boolean)
+    .map((value) => labels[value] || value);
+  return [...new Set(values)].join(" / ") || "语境词性";
+}
+
+function inferDictionaryPos(entry) {
+  if (entry.posLabel && entry.posLabel !== "语境词性") return entry.posLabel;
+  const match = `${entry.translation || ""}\n${entry.definition || ""}`.match(/(?:^|\n)\s*(n|v|a|s|ad|adv|prep|pron|conj|aux|int)\./i);
+  return match ? formatDictionaryPos(match[1]) : "语境词性";
+}
+
+async function lookupLocalDictionary(word) {
+  const normalized = normalizeWord(word);
+  const first = normalized[0];
+  if (!first || !/^[a-z]$/i.test(first)) return null;
+  if (!LOCAL_DICTIONARY_CACHE.has(first)) {
+    const filePath = path.join(LOCAL_DICTIONARY_DIR, `${first}.json`);
+    LOCAL_DICTIONARY_CACHE.set(first, await readJson(filePath, {}));
+  }
+  const entries = LOCAL_DICTIONARY_CACHE.get(first);
+  return entries[normalized] || null;
+}
+
 function pronunciationAudio(word) {
   const normalized = normalizeWord(word);
   if (!normalized) return "";
@@ -219,12 +262,22 @@ function pronunciationAudio(word) {
   return `/api/pronunciation?word=${encodeURIComponent(normalized)}`;
 }
 
-function localTranslation(text, type) {
+async function localTranslation(text, type) {
   const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
   if (type === "word") {
     const word = normalizeWord(text);
-    const entry = LOCAL_WORDS[word];
-    if (entry) return { ...entry, mode: "local" };
+    const entry = (await lookupLocalDictionary(word)) || LOCAL_WORDS[word];
+    if (entry) {
+      return {
+        pos: inferDictionaryPos(entry),
+        meaning: entry.translation || entry.meaning || entry.definition || "本地词典暂未提供中文释义。",
+        example: entry.example || "",
+        phonetic: entry.phonetic || "",
+        audio: pronunciationAudio(word),
+        mode: entry.translation ? "local-dictionary" : "local",
+        provider: entry.translation ? "本地英汉词典" : undefined,
+      };
+    }
     return {
       pos: "根据语境判断",
       meaning: "本地词典暂未收录该词。你可以在设置中接入 AI 翻译，以获得词性、语境义和例句。",
@@ -267,6 +320,7 @@ async function remoteTranslation(text, type) {
 }
 
 const PUBLIC_TRANSLATE_ENDPOINT = "https://translate.googleapis.com/translate_a/single";
+const BACKUP_TRANSLATE_ENDPOINT = "https://lingva.ml/api/v1";
 const PUBLIC_DICTIONARY_ENDPOINT = "https://api.dictionaryapi.dev/api/v2/entries/en";
 const PARTS_OF_SPEECH = {
   noun: "名词",
@@ -327,10 +381,30 @@ async function translateWithGoogle(text) {
   return translated;
 }
 
+async function translateWithLingva(text) {
+  const url = `${BACKUP_TRANSLATE_ENDPOINT}/en/zh/${encodeURIComponent(text)}`;
+  const response = await fetch(url, { headers: { "user-agent": "paper-reader/1.0" } });
+  if (!response.ok) throw new Error(`备用在线翻译返回 ${response.status}`);
+  const payload = await response.json();
+  const translated = typeof payload?.translation === "string" ? payload.translation.trim() : "";
+  if (!translated) throw new Error("备用在线翻译没有返回内容");
+  return translated;
+}
+
 async function translateLongText(text) {
   const chunks = splitTranslationChunks(text);
   const translated = [];
-  for (const chunk of chunks) translated.push(await translateWithGoogle(chunk));
+  for (const chunk of chunks) {
+    try {
+      translated.push(await translateWithGoogle(chunk));
+    } catch (googleError) {
+      try {
+        translated.push(await translateWithLingva(chunk));
+      } catch (backupError) {
+        throw new Error(`${googleError.message}; ${backupError.message}`);
+      }
+    }
+  }
   return translated.join("\n");
 }
 
@@ -408,21 +482,23 @@ async function translate(text, type) {
     return cached;
   }
   let result;
-  try {
-    result = await remoteTranslation(text, type);
-  } catch (error) {
-    result = null;
-    console.warn("AI translation unavailable:", error.message);
-  }
-  if (!result) {
+  if (process.env.PAPER_READER_OFFLINE !== "1") {
     try {
-      result = await publicTranslation(text, type);
+      result = await remoteTranslation(text, type);
     } catch (error) {
       result = null;
-      console.warn("Online translation unavailable:", error.message);
+      console.warn("AI translation unavailable:", error.message);
+    }
+    if (!result) {
+      try {
+        result = await publicTranslation(text, type);
+      } catch (error) {
+        result = null;
+        console.warn("Online translation unavailable:", error.message);
+      }
     }
   }
-  result ||= localTranslation(text, type);
+  result ||= await localTranslation(text, type);
   if (type === "word" && !result.audio) result.audio = pronunciationAudio(text);
   cache[key] = result;
   await writeJson(TRANSLATION_CACHE_FILE, cache);
@@ -564,5 +640,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Paper Reader is running at http://127.0.0.1:${PORT}`);
-  console.log(`Translation: ${process.env.PAPER_READER_AI_KEY && process.env.PAPER_READER_AI_URL ? "remote AI + online fallback + cache" : "online fallback + local cache"}`);
+  console.log(`Translation: ${process.env.PAPER_READER_AI_KEY && process.env.PAPER_READER_AI_URL ? "remote AI + online fallback + local dictionary" : "online fallback + local dictionary"}`);
 });

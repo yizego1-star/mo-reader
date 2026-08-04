@@ -9,6 +9,7 @@
 ```bash
 npm install
 python3 -m pip install -r requirements.txt
+python3 setup_local_dictionary.py
 npm start
 ```
 
@@ -34,7 +35,15 @@ PAPER_READER_PAPERS_DIR="/path/to/your/papers" npm start
 
 ## AI 翻译
 
-默认使用在线翻译并缓存结果；网络不可用时回退到本地词典。若要接入 OpenAI-compatible 服务，可在启动前设置：
+默认优先使用在线翻译并缓存结果；网络不可用时回退到本地 ECDICT 英汉词典。首次使用前运行一次 `python3 setup_local_dictionary.py`，即可离线查询词性、中文释义和音标。
+
+如果希望完全离线运行，可这样启动：
+
+```bash
+PAPER_READER_OFFLINE=1 npm start
+```
+
+若要接入 OpenAI-compatible 服务，可在启动前设置：
 
 ```bash
 PAPER_READER_AI_URL="你的接口地址" \
