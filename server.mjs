@@ -14,6 +14,8 @@ const VOCAB_FILE = path.join(DATA_DIR, "vocabulary.json");
 const TRANSLATION_CACHE_FILE = path.join(DATA_DIR, "translation-cache.json");
 const SUMMARY_CACHE_FILE = path.join(DATA_DIR, "summary-cache.json");
 const LOCAL_DICTIONARY_DIR = path.join(DATA_DIR, "dictionary");
+const LOCAL_TRANSLATION_DIR = path.join(DATA_DIR, "translation-models");
+const LOCAL_TRANSLATE_SCRIPT = path.join(APP_ROOT, "local_translate.py");
 const LOCAL_DICTIONARY_CACHE = new Map();
 const EXPORT_SCRIPT = path.join(APP_ROOT, "export_vocab.py");
 const PYTHON_BIN = process.env.PAPER_READER_PYTHON || "python3";
@@ -88,6 +90,7 @@ async function ensureDataFiles() {
   await fs.mkdir(PAPERS_DIR, { recursive: true });
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(LOCAL_DICTIONARY_DIR, { recursive: true });
+  await fs.mkdir(LOCAL_TRANSLATION_DIR, { recursive: true });
   if (!(await exists(VOCAB_FILE))) await fs.writeFile(VOCAB_FILE, "[]\n", "utf8");
   if (!(await exists(TRANSLATION_CACHE_FILE))) await fs.writeFile(TRANSLATION_CACHE_FILE, "{}\n", "utf8");
   if (!(await exists(SUMMARY_CACHE_FILE))) await fs.writeFile(SUMMARY_CACHE_FILE, "{}\n", "utf8");
@@ -319,6 +322,21 @@ async function remoteTranslation(text, type) {
   return { ...JSON.parse(raw), mode: "remote" };
 }
 
+async function localModelTranslation(text) {
+  if (!(await exists(LOCAL_TRANSLATE_SCRIPT))) return null;
+  const { stdout } = await execFileAsync(PYTHON_BIN, [LOCAL_TRANSLATE_SCRIPT, text], {
+    env: {
+      ...process.env,
+      ARGOS_PACKAGES_DIR: process.env.PAPER_READER_ARGOS_PACKAGES_DIR || LOCAL_TRANSLATION_DIR,
+    },
+    timeout: 120_000,
+    maxBuffer: 2_000_000,
+  });
+  const payload = JSON.parse(stdout.trim());
+  if (!payload.translation) throw new Error("本地翻译没有返回内容");
+  return payload.translation;
+}
+
 const PUBLIC_TRANSLATE_ENDPOINT = "https://translate.googleapis.com/translate_a/single";
 const BACKUP_TRANSLATE_ENDPOINT = "https://lingva.ml/api/v1";
 const PUBLIC_DICTIONARY_ENDPOINT = "https://api.dictionaryapi.dev/api/v2/entries/en";
@@ -482,7 +500,22 @@ async function translate(text, type) {
     return cached;
   }
   let result;
-  if (process.env.PAPER_READER_OFFLINE !== "1") {
+  if (type === "sentence" && process.env.PAPER_READER_OFFLINE !== "0") {
+    try {
+      const meaning = await localModelTranslation(text);
+      if (meaning) {
+        result = {
+          meaning,
+          note: "本地翻译已完成；原文没有被改动，中文只在本次选区中显示。",
+          mode: "local-model",
+          provider: "本地 Argos Translate",
+        };
+      }
+    } catch (error) {
+      console.warn("Local translation unavailable:", error.message);
+    }
+  }
+  if (!result && process.env.PAPER_READER_OFFLINE !== "1") {
     try {
       result = await remoteTranslation(text, type);
     } catch (error) {

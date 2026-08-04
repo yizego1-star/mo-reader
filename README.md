@@ -10,6 +10,7 @@
 npm install
 python3 -m pip install -r requirements.txt
 python3 setup_local_dictionary.py
+python3 setup_local_translation.py
 npm start
 ```
 
@@ -35,7 +36,7 @@ PAPER_READER_PAPERS_DIR="/path/to/your/papers" npm start
 
 ## AI 翻译
 
-默认优先使用在线翻译并缓存结果；网络不可用时回退到本地 ECDICT 英汉词典。首次使用前运行一次 `python3 setup_local_dictionary.py`，即可离线查询词性、中文释义和音标。
+句子翻译优先使用本地 Argos Translate 英译中模型，不受在线额度限制；单词使用本地 ECDICT 英汉词典。首次使用前运行一次 `python3 setup_local_dictionary.py` 和 `python3 setup_local_translation.py`，即可离线查询词性、中文释义、音标并翻译句子。
 
 如果希望完全离线运行，可这样启动：
 

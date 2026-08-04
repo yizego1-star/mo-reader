@@ -1,1 +1,2 @@
 python-docx>=1.1.0
+argostranslate>=1.11.0
