@@ -22,6 +22,7 @@ const state = {
   pronunciationKey: "",
 };
 const selectionGesture = { start: null, end: null, active: false };
+const CLICK_DRAG_THRESHOLD = 6;
 
 const els = {
   modeGate: $("#mode-gate"),
@@ -36,6 +37,11 @@ const els = {
   vocabCount: $("#vocab-count"),
   statPapers: $("#stat-papers"),
   statWords: $("#stat-words"),
+  paperImportCard: $("#paper-import-card"),
+  paperChooseFiles: $("#paper-choose-files"),
+  paperChooseFolder: $("#paper-choose-folder"),
+  paperFileInput: $("#paper-file-input"),
+  paperFolderInput: $("#paper-folder-input"),
   vocabTotal: $("#vocab-total"),
   vocabSelectionSummary: $("#vocab-selection-summary"),
   vocabExport: $("#vocab-export"),
@@ -189,6 +195,50 @@ async function loadLibrary() {
   renderLibrary();
   renderVocabulary();
   renderRecent();
+}
+
+async function importPapers(fileList) {
+  const files = [...fileList].filter((file) => /\.pdf$/i.test(file.name));
+  if (!files.length) {
+    showToast("请选择 PDF 文件");
+    return;
+  }
+
+  const importCard = els.paperImportCard;
+  importCard?.classList.add("uploading");
+  const imported = [];
+  const skipped = [];
+  const failed = [];
+  try {
+    for (const file of files) {
+      try {
+        const response = await fetch("/api/papers/import", {
+          method: "POST",
+          headers: {
+            "content-type": file.type || "application/pdf",
+            "x-paper-file-name": encodeURIComponent(file.name),
+          },
+          body: file,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 409) skipped.push(file.name);
+        else if (!response.ok) throw new Error(payload.error || "导入失败");
+        else imported.push(payload.paper?.fileName || file.name);
+      } catch (error) {
+        failed.push(`${file.name}：${error.message}`);
+      }
+    }
+    await loadLibrary();
+    const summary = [`成功导入 ${imported.length} 篇`];
+    if (skipped.length) summary.push(`已存在 ${skipped.length} 篇`);
+    if (failed.length) summary.push(`失败 ${failed.length} 篇`);
+    showToast(summary.join("，"));
+    if (failed.length) console.warn("论文导入失败：", failed);
+  } finally {
+    importCard?.classList.remove("uploading");
+    if (els.paperFileInput) els.paperFileInput.value = "";
+    if (els.paperFolderInput) els.paperFolderInput.value = "";
+  }
 }
 
 function renderLibrary() {
@@ -371,6 +421,45 @@ function selectedTextWithLayout(range) {
   return normalizeSelectedText(pieces.join(""));
 }
 
+function trimRangeWhitespace(range) {
+  const layer = nodeInTextLayer(range?.startContainer);
+  const endLayer = nodeInTextLayer(range?.endContainer);
+  if (!layer || layer !== endLayer) return range;
+
+  let firstBoundary = null;
+  let lastBoundary = null;
+  const textNodes = [...layer.querySelectorAll("span")]
+    .map((span) => span.firstChild)
+    .filter((node) => node?.nodeType === Node.TEXT_NODE && range.intersectsNode(node));
+
+  textNodes.forEach((node) => {
+    const nodeRange = document.createRange();
+    nodeRange.selectNodeContents(node);
+    const pieceRange = range.cloneRange();
+    if (pieceRange.compareBoundaryPoints(Range.START_TO_START, nodeRange) < 0) {
+      pieceRange.setStart(node, 0);
+    }
+    if (pieceRange.compareBoundaryPoints(Range.END_TO_END, nodeRange) > 0) {
+      pieceRange.setEnd(node, node.textContent.length);
+    }
+    const text = pieceRange.toString();
+    if (!text) return;
+    const leading = text.search(/\S/);
+    const trailing = text.search(/\s*$/);
+    if (leading < 0 || trailing <= leading) return;
+    const startOffset = pieceRange.startContainer === node ? pieceRange.startOffset : 0;
+    const endOffset = pieceRange.endContainer === node ? pieceRange.endOffset : node.textContent.length;
+    if (!firstBoundary) firstBoundary = { node, offset: startOffset + leading };
+    lastBoundary = { node, offset: startOffset + Math.min(trailing, endOffset - startOffset) };
+  });
+
+  if (firstBoundary && lastBoundary) {
+    range.setStart(firstBoundary.node, firstBoundary.offset);
+    range.setEnd(lastBoundary.node, lastBoundary.offset);
+  }
+  return range;
+}
+
 function positionPopover(rect) {
   const popover = els.explainPopover;
   const margin = 16;
@@ -402,8 +491,9 @@ function positionPopover(rect) {
 function selectedTextFromPage() {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
-  const range = selection.getRangeAt(0);
+  const range = selection.getRangeAt(0).cloneRange();
   if (!nodeInTextLayer(range.startContainer) || !nodeInTextLayer(range.endContainer)) return null;
+  trimRangeWhitespace(range);
   const text = selectedTextWithLayout(range);
   if (!text) return null;
   return { text, type: classifySelection(text), rect: range.getBoundingClientRect(), range };
@@ -470,30 +560,45 @@ function markSelection(selected) {
 }
 
 function wordFromSpanAtPoint(span, x) {
-  const text = span?.textContent || "";
-  if (!text) return "";
-  const offset = textOffsetAtPoint(span, x);
-  const words = [...text.matchAll(/[A-Za-z][A-Za-z'’\-]*/g)];
-  const match = words.find((item) => offset >= item.index && offset <= item.index + item[0].length) || words[0];
-  return match?.[0] || "";
+  return wordRangeAtPoint(span, x)?.text || "";
+}
+
+function spanAtPoint(x, y, fallbackTarget) {
+  const pointTarget = document.elementFromPoint?.(x, y);
+  const direct = pointTarget?.closest?.(".textLayer span") || fallbackTarget?.closest?.(".textLayer span");
+  if (direct) return direct;
+  const layer = pointTarget?.closest?.(".textLayer") || fallbackTarget?.closest?.(".textLayer");
+  if (!layer) return null;
+  return [...layer.querySelectorAll("span")]
+    .map((span) => {
+      const rect = span.getBoundingClientRect();
+      const horizontalDistance = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0;
+      const verticalDistance = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0;
+      return { span, distance: horizontalDistance + verticalDistance * 4 };
+    })
+    .sort((first, second) => first.distance - second.distance)[0]?.span || null;
 }
 
 function wordRangeAtPoint(span, x, y) {
   const textNode = span?.firstChild;
   if (!textNode || textNode.nodeType !== Node.TEXT_NODE || !span?.contains(textNode)) return null;
   const text = textNode.textContent || "";
-  const offset = textOffsetAtPoint(span, x);
   const words = [...text.matchAll(/[A-Za-z][A-Za-z'’\-]*/g)];
-  const match = words.find((item) => offset >= item.index && offset <= item.index + item[0].length)
-    || words.reduce((nearest, item) => Math.abs(item.index - offset) < Math.abs(nearest.index - offset) ? item : nearest, words[0]);
-  if (!match) return null;
-  const range = document.createRange();
-  range.setStart(textNode, match.index);
-  range.setEnd(textNode, match.index + match[0].length);
-  return { text: match[0], range };
+  if (!words.length) return null;
+  const candidates = words.map((match) => {
+    const range = document.createRange();
+    range.setStart(textNode, match.index);
+    range.setEnd(textNode, match.index + match[0].length);
+    const rect = range.getBoundingClientRect();
+    const distance = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0;
+    return { text: match[0], range, rect, distance };
+  });
+  candidates.sort((first, second) => first.distance - second.distance || first.rect.left - second.rect.left);
+  const nearest = candidates[0];
+  return nearest?.text ? { text: nearest.text, range: nearest.range } : null;
 }
 
-function textOffsetAtPoint(span, x) {
+function textOffsetAtPoint(span, x, bias = "nearest") {
   const textNode = span?.firstChild;
   const text = textNode?.textContent || "";
   if (!textNode || textNode.nodeType !== Node.TEXT_NODE || !text) return 0;
@@ -506,6 +611,8 @@ function textOffsetAtPoint(span, x) {
     characterRange.setEnd(textNode, offset + 1);
     const rect = characterRange.getBoundingClientRect();
     if (!rect.width) continue;
+    if (bias === "start" && x <= rect.left + 1) return offset;
+    if (bias === "end" && x >= rect.right - 1 && x <= rect.right + 1) return offset + 1;
     const middle = rect.left + rect.width / 2;
     if (x < middle) return offset;
     if (x <= rect.right + 0.5) return offset + 1;
@@ -520,11 +627,11 @@ function manualSelectionFromGesture() {
   selectionGesture.start = null;
   selectionGesture.end = null;
   if (!start || !end) return null;
-  const startSpan = start.target?.closest?.(".textLayer span");
-  const endSpan = end.target?.closest?.(".textLayer span");
+  const startSpan = spanAtPoint(start.x, start.y, start.target);
+  const endSpan = spanAtPoint(end.x, end.y, end.target);
   if (!startSpan || !endSpan || startSpan.closest(".textLayer") !== endSpan.closest(".textLayer")) return null;
   const distance = Math.hypot(end.x - start.x, end.y - start.y);
-  if (distance < 8) {
+  if (distance < CLICK_DRAG_THRESHOLD) {
     const exactWord = wordRangeAtPoint(startSpan, start.x, start.y);
     if (exactWord) return { text: exactWord.text, type: "word", rect: exactWord.range.getBoundingClientRect(), range: exactWord.range };
     const word = wordFromSpanAtPoint(startSpan, start.x);
@@ -542,16 +649,21 @@ function manualSelectionFromGesture() {
 
   // caretRangeFromPoint 在 PDF.js 的透明文字层上偶尔拿不到位置；用每个字符的
   // 实际视觉边界补算字符偏移，但仍然只建立到字符级的 Range，不再整段吞掉。
-  const startOffset = textOffsetAtPoint(startSpan, start.x);
-  const endOffset = textOffsetAtPoint(endSpan, end.x);
+  const rawStartOffset = textOffsetAtPoint(startSpan, start.x);
+  const rawEndOffset = textOffsetAtPoint(endSpan, end.x);
+  const forward = startIndex < endIndex || (startIndex === endIndex && rawStartOffset <= rawEndOffset);
+  const rangeStartSpan = forward ? startSpan : endSpan;
+  const rangeStartPoint = forward ? start : end;
+  const rangeEndSpan = forward ? endSpan : startSpan;
+  const rangeEndPoint = forward ? end : start;
+  const rangeStartOffset = textOffsetAtPoint(rangeStartSpan, rangeStartPoint.x, "start");
+  const rangeEndOffset = textOffsetAtPoint(rangeEndSpan, rangeEndPoint.x, "end");
+  const rangeStartNode = rangeStartSpan.firstChild;
+  const rangeEndNode = rangeEndSpan.firstChild;
   const range = document.createRange();
-  if (startIndex < endIndex || (startIndex === endIndex && startOffset <= endOffset)) {
-    range.setStart(startTextNode, startOffset);
-    range.setEnd(endTextNode, endOffset);
-  } else {
-    range.setStart(endTextNode, endOffset);
-    range.setEnd(startTextNode, startOffset);
-  }
+  range.setStart(rangeStartNode, rangeStartOffset);
+  range.setEnd(rangeEndNode, rangeEndOffset);
+  trimRangeWhitespace(range);
   const text = selectedTextWithLayout(range);
   if (!text) return null;
   return { text, type: classifySelection(text), rect: range.getBoundingClientRect(), range };
@@ -899,18 +1011,19 @@ document.addEventListener("mouseup", (event) => {
   selectionGesture.active = false;
   // 在 mouseup 这一刻启动单词发音，保留用户点击带来的播放权限；句子不触发。
   const gestureDistance = Math.hypot(event.clientX - selectionGesture.start.x, event.clientY - selectionGesture.start.y);
-  if (gestureDistance < 14) {
-    const span = selectionGesture.start.target?.closest?.(".textLayer span");
+  const isClick = gestureDistance < CLICK_DRAG_THRESHOLD;
+  if (isClick) {
+    const span = spanAtPoint(selectionGesture.start.x, selectionGesture.start.y, selectionGesture.start.target);
     const wordSelection = span && wordRangeAtPoint(span, selectionGesture.start.x, selectionGesture.start.y);
     if (wordSelection?.text) playWordPronunciation(wordSelection.text);
   }
   setTimeout(() => {
     // 拖动选区时，以鼠标起止落点重建 Range，避免浏览器原生选区多吃相邻文字。
-    const clickSpan = selectionGesture.start?.target?.closest?.(".textLayer span");
-    const clickWord = gestureDistance < 14 && clickSpan
+    const clickSpan = selectionGesture.start && spanAtPoint(selectionGesture.start.x, selectionGesture.start.y, selectionGesture.start.target);
+    const clickWord = isClick && clickSpan
       ? wordRangeAtPoint(clickSpan, selectionGesture.start.x, selectionGesture.start.y)
       : null;
-    const manual = gestureDistance < 14 ? null : manualSelectionFromGesture();
+    const manual = isClick ? null : manualSelectionFromGesture();
     const selected = clickWord?.text
       ? { text: clickWord.text, type: "word", rect: clickWord.range.getBoundingClientRect(), range: clickWord.range }
       : manual || selectedTextFromPage();
@@ -939,6 +1052,40 @@ $("#refresh-library").addEventListener("click", async () => {
   const button = $("#refresh-library");
   button.disabled = true;
   try { await loadLibrary(); showToast("论文库已刷新"); } catch (error) { showToast(error.message); } finally { button.disabled = false; }
+});
+els.paperImportCard?.addEventListener("click", () => els.paperFileInput?.click());
+els.paperImportCard?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    els.paperFileInput?.click();
+  }
+});
+els.paperChooseFiles?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  els.paperFileInput?.click();
+});
+els.paperChooseFolder?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  els.paperFolderInput?.click();
+});
+els.paperFileInput?.addEventListener("change", (event) => importPapers(event.target.files));
+els.paperFolderInput?.addEventListener("change", (event) => importPapers(event.target.files));
+els.paperImportCard?.addEventListener("dragenter", (event) => {
+  event.preventDefault();
+  els.paperImportCard.classList.add("drag-over");
+});
+els.paperImportCard?.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  els.paperImportCard.classList.add("drag-over");
+});
+els.paperImportCard?.addEventListener("dragleave", (event) => {
+  if (!els.paperImportCard.contains(event.relatedTarget)) els.paperImportCard.classList.remove("drag-over");
+});
+els.paperImportCard?.addEventListener("drop", (event) => {
+  event.preventDefault();
+  els.paperImportCard.classList.remove("drag-over");
+  importPapers(event.dataTransfer.files);
 });
 $("#back-to-library").addEventListener("click", () => { closePopover(); switchView("library"); });
 $("#close-popover").addEventListener("click", closePopover);

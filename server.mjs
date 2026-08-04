@@ -598,6 +598,44 @@ async function readBody(req) {
   return body ? JSON.parse(body) : {};
 }
 
+async function readBinaryBody(req, maxBytes = 100 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      const error = new Error("单个文件不能超过 100 MB");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function uploadedPaperName(rawName) {
+  let decoded = rawName || "";
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // Keep the original header when a client sends an unescaped name.
+  }
+  const fileName = path.basename(decoded).replace(/[\0\r\n]/g, "").trim();
+  if (!fileName || !/\.pdf$/i.test(fileName)) return null;
+  return fileName.replace(/\.pdf$/i, ".pdf");
+}
+
+async function importPaper(res, req) {
+  const fileName = uploadedPaperName(req.headers["x-paper-file-name"]);
+  if (!fileName) return json(res, 400, { error: "只支持 PDF 文件" });
+  const filePath = path.join(PAPERS_DIR, fileName);
+  if (await exists(filePath)) return json(res, 409, { error: "论文库中已经有同名文件" });
+  const content = await readBinaryBody(req);
+  if (!content.length) return json(res, 400, { error: "文件内容为空" });
+  await fs.writeFile(filePath, content, { flag: "wx" });
+  return json(res, 200, { paper: { id: fileName, fileName } });
+}
+
 async function servePdf(res, fileName, req) {
   const safeName = path.basename(fileName);
   if (!safeName.toLowerCase().endsWith(".pdf")) return json(res, 404, { error: "PDF not found" });
@@ -707,6 +745,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (url.pathname === "/api/papers" && req.method === "GET") return json(res, 200, { papers: await listPapers(requestMode(req)) });
+    if (url.pathname === "/api/papers/import" && req.method === "POST") return importPaper(res, req);
     if (url.pathname === "/api/vocab" && req.method === "GET") return json(res, 200, { words: await readJson(VOCAB_FILE, []) });
     if (url.pathname === "/api/vocab/export" && req.method === "POST") {
       return exportVocabulary(res, await readBody(req));
@@ -745,7 +784,7 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(res, url.pathname);
   } catch (error) {
     console.error(error);
-    json(res, 500, { error: error.message || "Internal server error" });
+    json(res, error.statusCode || 500, { error: error.message || "Internal server error" });
   }
 });
 

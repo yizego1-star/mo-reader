@@ -100,6 +100,16 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .paper-card-footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; padding-top: 22px; color: #a3aea7; font-size: 10px; }
 .paper-card-footer span:last-child { color: var(--green-700); }
 .empty-state { grid-column: 1/-1; padding: 70px 20px; text-align: center; border: 1px dashed #cddbd0; border-radius: 14px; color: var(--muted); }
+.paper-import-card { min-height: 92px; margin-bottom: 18px; padding: 17px 21px; display: flex; align-items: center; gap: 14px; border: 1px dashed #b8d1be; border-radius: 13px; background: rgba(255,255,255,.72); cursor: pointer; transition: .2s ease; }
+.paper-import-card:hover, .paper-import-card.drag-over { border-color: var(--green-700); background: var(--green-50); box-shadow: 0 10px 28px rgba(20,74,49,.08); }
+.paper-import-card.uploading { opacity: .65; pointer-events: none; }
+.paper-import-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: white; background: var(--green-800); font-size: 24px; line-height: 1; }
+.paper-import-copy { display: grid; gap: 5px; min-width: 0; }
+.paper-import-copy strong { color: var(--green-950); font-size: 13px; font-weight: 650; }
+.paper-import-copy span { color: var(--muted); font-size: 11px; }
+.paper-import-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.paper-import-actions .secondary-button { padding: 9px 13px; }
+.import-folder-button { color: var(--green-700); white-space: nowrap; }
 
 .reader-view { padding-top: 25px; position: relative; }
 .reader-toolbar { position: relative; z-index: 20; display: flex; align-items: center; gap: 24px; padding-bottom: 19px; }

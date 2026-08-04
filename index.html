@@ -83,6 +83,16 @@
             <div><h2>全部论文</h2><p>放入这个文件夹的 PDF 会自动出现在这里。</p></div>
             <div class="view-toggle"><button class="view-toggle-button selected">▦</button><button class="view-toggle-button">≡</button></div>
           </div>
+          <div class="paper-import-card" id="paper-import-card" tabindex="0" role="button" aria-label="添加论文或阅读资料">
+            <div class="paper-import-icon">＋</div>
+            <div class="paper-import-copy"><strong>添加论文或阅读资料</strong><span>把 PDF 拖到这里，或从本地文件与文件夹中选择</span></div>
+            <div class="paper-import-actions">
+              <button class="secondary-button" id="paper-choose-files" type="button">选择文件</button>
+              <button class="quiet-button import-folder-button" id="paper-choose-folder" type="button">选择文件夹</button>
+            </div>
+            <input id="paper-file-input" type="file" accept=".pdf,application/pdf" multiple hidden />
+            <input id="paper-folder-input" type="file" accept=".pdf,application/pdf" webkitdirectory directory multiple hidden />
+          </div>
           <div class="paper-grid" id="paper-grid"></div>
         </section>
 
