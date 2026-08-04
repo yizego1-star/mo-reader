@@ -23,6 +23,17 @@ html, body { margin: 0; min-height: 100%; background: var(--cream); }
 body { min-width: 1080px; }
 button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 
+.mode-gate { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(8,41,31,.72); backdrop-filter: blur(14px); }
+.mode-card { width: min(620px, 100%); padding: 45px 48px 48px; border: 1px solid rgba(220,241,225,.55); border-radius: 24px; background: #fbfdfb; box-shadow: 0 30px 100px rgba(0,0,0,.24); }
+.mode-card h1 { margin: 13px 0 9px; color: var(--green-950); font-size: 36px; letter-spacing: -.06em; }
+.mode-gate-intro { margin: 0; color: var(--muted); font-size: 13px; }
+.mode-options { display: grid; gap: 12px; margin-top: 30px; }
+.mode-option { display: flex; align-items: center; gap: 16px; width: 100%; padding: 17px 18px; border: 1px solid var(--line); border-radius: 13px; text-align: left; background: white; transition: .2s ease; }
+.mode-option:hover { border-color: #9fc7aa; background: var(--green-50); transform: translateY(-1px); box-shadow: 0 10px 25px rgba(18,65,45,.08); }
+.mode-option-icon { display: grid; place-items: center; width: 35px; height: 35px; border-radius: 10px; color: white; background: var(--green-800); font-size: 18px; }
+.mode-option strong { display: block; color: var(--green-950); font-size: 14px; }
+.mode-option small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
 .app-shell { display: flex; min-height: 100vh; }
 .sidebar { width: 246px; padding: 31px 18px 24px; display: flex; flex-direction: column; background: var(--green-950); color: #eaf4ee; position: fixed; inset: 0 auto 0 0; }
 .brand-mark { display: flex; align-items: center; gap: 10px; padding: 0 14px; font-weight: 700; letter-spacing: .03em; font-size: 19px; }
@@ -50,7 +61,7 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .topbar-actions { display: flex; align-items: center; gap: 20px; }
 .icon-button { width: 34px; height: 34px; border-radius: 50%; background: transparent; color: var(--muted); font-size: 27px; line-height: 1; }
 .icon-button:hover { background: #e8eee9; color: var(--green-800); }
-.profile-chip { width: 30px; height: 30px; border-radius: 50%; color: #dfeee4; background: var(--green-700); font-size: 12px; font-weight: 600; }
+.profile-chip { width: 30px; height: 30px; border-radius: 50%; color: #dfeee4; background: var(--green-700); font-size: 14px; font-weight: 600; }
 .view { padding: 55px 58px 76px; max-width: 1510px; margin: 0 auto; }
 .hidden { display: none !important; }
 .page-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 36px; }
@@ -210,6 +221,7 @@ body.reader-mode .topbar { display: none; }
 body.reader-mode { min-width: 0; }
 body.reader-mode .main-content { margin-left: 0; }
 body.reader-mode .reader-view { max-width: none; padding: 27px 46px 60px; }
+body.reader-mode .reader-toolbar { position: sticky; top: 0; z-index: 50; margin: -27px -46px 19px; padding: 27px 46px 19px; background: rgba(246,248,245,.94); border-bottom: 1px solid rgba(207,224,210,.75); box-shadow: 0 8px 22px rgba(21,61,42,.06); backdrop-filter: blur(12px); }
 body.reader-mode .reader-layout { display: block; }
 body.reader-mode .reader-side-panel,
 body.reader-mode .reading-tip,
@@ -220,6 +232,7 @@ body.reader-mode .reader-title-wrap h1 { max-width: none; }
 
 @media (max-width: 760px) {
   body.reader-mode .reader-view { padding-left: 16px; padding-right: 16px; }
+  body.reader-mode .reader-toolbar { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
   body.reader-mode .reader-toolbar { gap: 10px; }
   body.reader-mode .reader-title-wrap h1 { font-size: 15px; }
   body.reader-mode .paper-search { width: 170px; flex-basis: 170px; }

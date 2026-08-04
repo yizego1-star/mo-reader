@@ -15,6 +15,7 @@ const TRANSLATION_CACHE_FILE = path.join(DATA_DIR, "translation-cache.json");
 const SUMMARY_CACHE_FILE = path.join(DATA_DIR, "summary-cache.json");
 const LOCAL_DICTIONARY_DIR = path.join(DATA_DIR, "dictionary");
 const LOCAL_TRANSLATION_DIR = path.join(DATA_DIR, "translation-models");
+const LOCAL_PRONUNCIATION_DIR = path.join(DATA_DIR, "pronunciation");
 const LOCAL_TRANSLATE_SCRIPT = path.join(APP_ROOT, "local_translate.py");
 const LOCAL_DICTIONARY_CACHE = new Map();
 const EXPORT_SCRIPT = path.join(APP_ROOT, "export_vocab.py");
@@ -105,6 +106,10 @@ function json(res, status, payload) {
   res.end(body);
 }
 
+function requestMode(req) {
+  return req.headers["x-paper-reader-mode"] === "offline" ? "offline" : "online";
+}
+
 function cleanText(text) {
   return text
     .replace(/\u00ad/g, "")
@@ -113,7 +118,7 @@ function cleanText(text) {
     .trim();
 }
 
-async function pdfMeta(fileName) {
+async function pdfMeta(fileName, mode = "online") {
   const filePath = path.join(PAPERS_DIR, fileName);
   let title = fileName.replace(/\.pdf$/i, "");
   let pages = null;
@@ -139,7 +144,7 @@ async function pdfMeta(fileName) {
     // Keep a short fallback summary below.
   }
 
-  const summary = KNOWN_SUMMARIES[fileName] || await summarizePaper(fileName, title, abstract);
+  const summary = KNOWN_SUMMARIES[fileName] || await summarizePaper(fileName, title, abstract, mode);
   return {
     id: fileName,
     fileName,
@@ -182,14 +187,16 @@ async function remoteSummary(title, abstract) {
   return typeof parsed.summary === "string" ? parsed.summary.trim() : null;
 }
 
-async function summarizePaper(fileName, title, abstract) {
+async function summarizePaper(fileName, title, abstract, mode = "online") {
   const cache = await readJson(SUMMARY_CACHE_FILE, {});
   if (cache[fileName]) return cache[fileName];
   let summary = null;
-  try {
-    summary = await remoteSummary(title, abstract);
-  } catch (error) {
-    console.warn("AI summary unavailable:", error.message);
+  if (mode !== "offline") {
+    try {
+      summary = await remoteSummary(title, abstract);
+    } catch (error) {
+      console.warn("AI summary unavailable:", error.message);
+    }
   }
   summary ||= inferSummary(abstract, title);
   cache[fileName] = summary;
@@ -197,9 +204,9 @@ async function summarizePaper(fileName, title, abstract) {
   return summary;
 }
 
-async function listPapers() {
+async function listPapers(mode = "online") {
   const names = (await fs.readdir(PAPERS_DIR)).filter((name) => name.toLowerCase().endsWith(".pdf"));
-  return Promise.all(names.map(pdfMeta));
+  return Promise.all(names.map((name) => pdfMeta(name, mode)));
 }
 
 async function readJson(filePath, fallback) {
@@ -353,6 +360,17 @@ async function localModelTranslation(text) {
   return payload.translation;
 }
 
+async function localLongTextTranslation(text) {
+  const chunks = splitTranslationChunks(text, 1200);
+  const translations = [];
+  for (const chunk of chunks) {
+    const translation = await localModelTranslation(chunk);
+    if (!translation?.trim()) throw new Error("本地翻译没有返回内容");
+    translations.push(translation.trim());
+  }
+  return translations.join("\n\n");
+}
+
 const PUBLIC_TRANSLATE_ENDPOINT = "https://translate.googleapis.com/translate_a/single";
 const BACKUP_TRANSLATE_ENDPOINT = "https://lingva.ml/api/v1";
 const PUBLIC_DICTIONARY_ENDPOINT = "https://api.dictionaryapi.dev/api/v2/entries/en";
@@ -503,14 +521,15 @@ function isPlaceholderTranslation(result) {
   return /本地词典暂未收录|本地模式已识别这段英文/.test(result?.meaning || "");
 }
 
-async function translate(text, type) {
+async function translate(text, type, mode = "online") {
   const cache = await readJson(TRANSLATION_CACHE_FILE, {});
   const key = `${type}:${text.trim().toLowerCase()}`;
-  const offline = process.env.PAPER_READER_OFFLINE === "1";
+  const offline = mode === "offline";
   const cached = cache[key];
   const staleLocalPlaceholder = cached?.mode === "local" && !cached?.provider;
   const cachedOnline = cached?.mode === "online" || cached?.mode === "remote";
-  if (cached && !isPlaceholderTranslation(cached) && !staleLocalPlaceholder && !(offline && cachedOnline)) {
+  const cachedLocal = cached?.mode === "local" || cached?.mode === "local-model" || cached?.mode === "local-dictionary";
+  if (cached && !isPlaceholderTranslation(cached) && !staleLocalPlaceholder && !(offline && cachedOnline) && !(mode === "online" && cachedLocal)) {
     const cachedResult = { ...cached, cached: true };
     if (type === "word") {
       cachedResult.audio = pronunciationAudio(text);
@@ -520,9 +539,9 @@ async function translate(text, type) {
     return cachedResult;
   }
   let result;
-  if (type === "sentence" && process.env.PAPER_READER_OFFLINE !== "0") {
+  if (type === "sentence" && offline) {
     try {
-      const meaning = await localModelTranslation(text);
+      const meaning = await localLongTextTranslation(text);
       if (meaning) {
         result = {
           meaning,
@@ -535,7 +554,7 @@ async function translate(text, type) {
       console.warn("Local translation unavailable:", error.message);
     }
   }
-  if (!result && process.env.PAPER_READER_OFFLINE !== "1") {
+  if (!result && !offline) {
     try {
       result = await remoteTranslation(text, type);
     } catch (error) {
@@ -549,6 +568,21 @@ async function translate(text, type) {
         result = null;
         console.warn("Online translation unavailable:", error.message);
       }
+    }
+  }
+  if (!result && type === "sentence") {
+    try {
+      const meaning = await localLongTextTranslation(text);
+      if (meaning) {
+        result = {
+          meaning,
+          note: "本地翻译已完成；原文没有被改动，中文只在本次选区中显示。",
+          mode: "local-model",
+          provider: "本地 Argos Translate",
+        };
+      }
+    } catch (error) {
+      console.warn("Local translation fallback unavailable:", error.message);
     }
   }
   result ||= await localTranslation(text, type);
@@ -589,9 +623,32 @@ async function servePdf(res, fileName, req) {
   createReadStream(filePath, { start, end }).pipe(res);
 }
 
-async function servePronunciation(res, word) {
+async function serveLocalPronunciation(res, normalized) {
+  const outputPath = path.join(LOCAL_PRONUNCIATION_DIR, `${normalized}.m4a`);
+  if (!(await exists(outputPath))) {
+    await fs.mkdir(LOCAL_PRONUNCIATION_DIR, { recursive: true });
+    const stamp = `${normalized}-${Date.now()}`;
+    const sourcePath = path.join(LOCAL_PRONUNCIATION_DIR, `${stamp}.aiff`);
+    try {
+      await execFileAsync("say", ["-v", "Samantha", "-o", sourcePath, normalized], { timeout: 20_000 });
+      await execFileAsync("afconvert", ["-f", "m4af", "-d", "aac", sourcePath, outputPath], { timeout: 20_000 });
+    } finally {
+      await fs.unlink(sourcePath).catch(() => {});
+    }
+  }
+  const stat = await fs.stat(outputPath);
+  res.writeHead(200, {
+    "content-type": "audio/mp4",
+    "content-length": stat.size,
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  createReadStream(outputPath).pipe(res);
+}
+
+async function servePronunciation(res, word, mode = "online") {
   const normalized = normalizeWord(word || "");
   if (!normalized) return json(res, 400, { error: "word is required" });
+  if (mode === "offline") return serveLocalPronunciation(res, normalized);
   const url = new URL("https://translate.google.com/translate_tts");
   url.searchParams.set("ie", "UTF-8");
   url.searchParams.set("client", "tw-ob");
@@ -649,7 +706,7 @@ async function servePdfJs(res, urlPath) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    if (url.pathname === "/api/papers" && req.method === "GET") return json(res, 200, { papers: await listPapers() });
+    if (url.pathname === "/api/papers" && req.method === "GET") return json(res, 200, { papers: await listPapers(requestMode(req)) });
     if (url.pathname === "/api/vocab" && req.method === "GET") return json(res, 200, { words: await readJson(VOCAB_FILE, []) });
     if (url.pathname === "/api/vocab/export" && req.method === "POST") {
       return exportVocabulary(res, await readBody(req));
@@ -674,10 +731,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/translate" && req.method === "POST") {
       const body = await readBody(req);
       if (!body.text?.trim()) return json(res, 400, { error: "text is required" });
-      return json(res, 200, await translate(body.text, body.type === "word" ? "word" : "sentence"));
+      return json(res, 200, await translate(body.text, body.type === "word" ? "word" : "sentence", requestMode(req)));
     }
     if (url.pathname === "/api/pronunciation" && req.method === "GET") {
-      return servePronunciation(res, url.searchParams.get("word") || "");
+      const mode = url.searchParams.get("mode") === "offline" ? "offline" : requestMode(req);
+      return servePronunciation(res, url.searchParams.get("word") || "", mode);
     }
     if (url.pathname.startsWith("/api/summary") && req.method === "POST") {
       return json(res, 200, { summary: "论文中文概括会在接入 AI 后自动生成；当前已提供首篇论文的精炼概括。" });

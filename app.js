@@ -5,6 +5,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/build/pdf.worker.mjs";
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
+  mode: localStorage.getItem("mo-reader-mode") || "online",
   papers: [],
   vocabulary: [],
   currentPaper: null,
@@ -23,6 +24,9 @@ const state = {
 const selectionGesture = { start: null, end: null, active: false };
 
 const els = {
+  modeGate: $("#mode-gate"),
+  modeStatus: $("#mode-status"),
+  modeChip: $("#mode-chip"),
   libraryView: $("#library-view"),
   readerView: $("#reader-view"),
   vocabView: $("#vocabulary-view"),
@@ -54,6 +58,30 @@ const els = {
   searchResults: $("#paper-search-results"),
   toast: $("#toast"),
 };
+
+const modeLabels = { online: "在线模式", offline: "离线模式" };
+
+function updateModeUI() {
+  const label = modeLabels[state.mode] || "未选择模式";
+  if (els.modeStatus) els.modeStatus.textContent = label;
+  if (els.modeChip) els.modeChip.title = `当前：${label}，点击切换`;
+}
+
+function showModeGate() {
+  els.modeGate?.classList.remove("hidden");
+}
+
+async function chooseMode(mode) {
+  state.mode = mode;
+  localStorage.setItem("mo-reader-mode", mode);
+  updateModeUI();
+  els.modeGate?.classList.add("hidden");
+  try {
+    await loadLibrary();
+  } catch (error) {
+    els.paperGrid.innerHTML = `<div class="empty-state">无法连接论文库：${escapeHtml(error.message)}</div>`;
+  }
+}
 
 function escapeHtml(value = "") {
   return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
@@ -125,7 +153,8 @@ function playWordPronunciation(word) {
   if (!normalized || state.pronunciationKey === normalized) return;
   stopPronunciation();
   state.pronunciationKey = normalized;
-  const audio = new Audio(`/api/pronunciation?word=${encodeURIComponent(normalized)}`);
+  const modeQuery = state.mode === "offline" ? "&mode=offline" : "";
+  const audio = new Audio(`/api/pronunciation?word=${encodeURIComponent(normalized)}${modeQuery}`);
   audio.preload = "auto";
   audio.addEventListener("ended", () => { state.pronunciationAudio = null; }, { once: true });
   audio.addEventListener("error", () => {
@@ -142,7 +171,9 @@ function playWordPronunciation(word) {
 }
 
 async function requestJson(url, options) {
-  const response = await fetch(url, options);
+  const headers = new Headers(options?.headers || {});
+  headers.set("x-paper-reader-mode", state.mode || "online");
+  const response = await fetch(url, { ...options, headers });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "请求失败");
   return payload;
@@ -302,6 +333,44 @@ function normalizeSelectedText(text) {
     .trim();
 }
 
+function selectedTextWithLayout(range) {
+  const layer = nodeInTextLayer(range?.startContainer);
+  const endLayer = nodeInTextLayer(range?.endContainer);
+  if (!layer || layer !== endLayer) return normalizeSelectedText(range?.toString() || "");
+
+  const pieces = [];
+  let previous = null;
+  [...layer.querySelectorAll("span")].forEach((span) => {
+    if (!range.intersectsNode(span)) return;
+    const spanRange = document.createRange();
+    spanRange.selectNodeContents(span);
+    const pieceRange = range.cloneRange();
+    if (pieceRange.compareBoundaryPoints(Range.START_TO_START, spanRange) < 0) {
+      pieceRange.setStart(spanRange.startContainer, spanRange.startOffset);
+    }
+    if (pieceRange.compareBoundaryPoints(Range.END_TO_END, spanRange) > 0) {
+      pieceRange.setEnd(spanRange.endContainer, spanRange.endOffset);
+    }
+    const text = pieceRange.toString();
+    if (!text) return;
+
+    if (previous) {
+      const previousRect = previous.span.getBoundingClientRect();
+      const currentRect = span.getBoundingClientRect();
+      const fontHeight = Math.max(previousRect.height, currentRect.height, 1);
+      const sameLine = Math.abs(previousRect.top - currentRect.top) < fontHeight * 0.45;
+      const gap = currentRect.left - previousRect.right;
+      const hasWordCharacters = /[A-Za-z0-9]$/.test(previous.text) && /^[A-Za-z0-9]/.test(text);
+      if (hasWordCharacters && (!sameLine || gap > Math.max(1, fontHeight * 0.12))) {
+        pieces.push(sameLine ? " " : "\n");
+      }
+    }
+    pieces.push(text);
+    previous = { span, text };
+  });
+  return normalizeSelectedText(pieces.join(""));
+}
+
 function positionPopover(rect) {
   const popover = els.explainPopover;
   const margin = 16;
@@ -335,7 +404,7 @@ function selectedTextFromPage() {
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
   const range = selection.getRangeAt(0);
   if (!nodeInTextLayer(range.startContainer) || !nodeInTextLayer(range.endContainer)) return null;
-  const text = normalizeSelectedText(selection.toString());
+  const text = selectedTextWithLayout(range);
   if (!text) return null;
   return { text, type: classifySelection(text), rect: range.getBoundingClientRect(), range };
 }
@@ -483,7 +552,7 @@ function manualSelectionFromGesture() {
     range.setStart(endTextNode, endOffset);
     range.setEnd(startTextNode, startOffset);
   }
-  const text = normalizeSelectedText(range.toString());
+  const text = selectedTextWithLayout(range);
   if (!text) return null;
   return { text, type: classifySelection(text), rect: range.getBoundingClientRect(), range };
 }
@@ -536,7 +605,7 @@ async function translateSelection(selected) {
     });
     if (state.lastSelectionKey !== `${selected.type}:${selected.text}`) return;
     renderExplanation(result, selected);
-    els.popoverStatus.textContent = result.mode === "remote" ? "联网 AI" : result.mode === "online" ? "在线翻译" : "本地模式";
+    els.popoverStatus.textContent = result.mode === "remote" ? "联网 AI" : result.mode === "online" ? "在线翻译" : result.mode === "local-model" ? "本地模型" : result.mode === "local-dictionary" ? "本地词典" : "本地模式";
     positionPopover(selected.rect);
   } catch (error) {
     els.popoverStatus.textContent = "暂时无法理解";
@@ -830,16 +899,27 @@ document.addEventListener("mouseup", (event) => {
   selectionGesture.active = false;
   // 在 mouseup 这一刻启动单词发音，保留用户点击带来的播放权限；句子不触发。
   const gestureDistance = Math.hypot(event.clientX - selectionGesture.start.x, event.clientY - selectionGesture.start.y);
-  if (gestureDistance < 8) {
+  if (gestureDistance < 14) {
     const span = selectionGesture.start.target?.closest?.(".textLayer span");
     const wordSelection = span && wordRangeAtPoint(span, selectionGesture.start.x, selectionGesture.start.y);
     if (wordSelection?.text) playWordPronunciation(wordSelection.text);
   }
   setTimeout(() => {
     // 拖动选区时，以鼠标起止落点重建 Range，避免浏览器原生选区多吃相邻文字。
-    const manual = manualSelectionFromGesture();
-    const selected = manual || selectedTextFromPage();
+    const clickSpan = selectionGesture.start?.target?.closest?.(".textLayer span");
+    const clickWord = gestureDistance < 14 && clickSpan
+      ? wordRangeAtPoint(clickSpan, selectionGesture.start.x, selectionGesture.start.y)
+      : null;
+    const manual = gestureDistance < 14 ? null : manualSelectionFromGesture();
+    const selected = clickWord?.text
+      ? { text: clickWord.text, type: "word", rect: clickWord.range.getBoundingClientRect(), range: clickWord.range }
+      : manual || selectedTextFromPage();
     if (selected) {
+      if (selected.range) {
+        const nativeSelection = window.getSelection();
+        nativeSelection?.removeAllRanges();
+        nativeSelection?.addRange(selected.range);
+      }
       selectionGesture.start = null;
       selectionGesture.end = null;
       handleSelection(selected);
@@ -876,7 +956,10 @@ $("#vocab-select-none").addEventListener("click", () => {
 });
 $("#vocab-export").addEventListener("click", exportVocabulary);
 $("#search-button").addEventListener("click", () => showToast("搜索功能会在论文数量增加后开放"));
-$("#settings-button").addEventListener("click", () => showToast("默认使用在线翻译；断网时回退到本地词典"));
+$("#settings-button").addEventListener("click", showModeGate);
+els.modeChip?.addEventListener("click", showModeGate);
+$("#reader-mode-switch")?.addEventListener("click", showModeGate);
+$$("[data-mode-choice]").forEach((button) => button.addEventListener("click", () => chooseMode(button.dataset.modeChoice)));
 $("#reader-settings").addEventListener("click", () => showToast("阅读字号设置即将加入"));
 
 let paperSearchTimer;
@@ -914,6 +997,8 @@ document.addEventListener("mousedown", (event) => {
   if (!event.target.closest?.(".paper-search")) els.searchResults.classList.add("hidden");
 });
 
+updateModeUI();
+els.modeGate?.classList.add("hidden");
 loadLibrary().catch((error) => {
   els.paperGrid.innerHTML = `<div class="empty-state">无法连接论文库：${escapeHtml(error.message)}</div>`;
 });

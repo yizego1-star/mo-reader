@@ -34,9 +34,9 @@ PAPER_READER_PAPERS_DIR="/path/to/your/papers" npm start
 
 把新的 `.pdf` 文件放入论文目录后，在论文库点击“刷新论文库”即可。
 
-## AI 翻译
+## 阅读模式与翻译
 
-句子翻译优先使用本地 Argos Translate 英译中模型，不受在线额度限制；单词使用本地 ECDICT 英汉词典。首次使用前运行一次 `python3 setup_local_dictionary.py` 和 `python3 setup_local_translation.py`，即可离线查询词性、中文释义、音标并翻译句子。
+打开应用后默认进入在线模式，也可以在主界面或阅读界面随时切换。在线模式优先调用已配置的 AI 接口、Google 翻译和 Lingva，失败后回退到本地能力；离线模式只使用本地 ECDICT 英汉词典、本地 Argos Translate 英译中模型和系统语音，不访问网络。离线选中单句、多句或多段英文时，会自动按句子和长度分块翻译，再合并为完整中文。首次使用前运行一次 `python3 setup_local_dictionary.py` 和 `python3 setup_local_translation.py`，即可离线查询词性、中文释义、音标并翻译句子。
 
 如果希望完全离线运行，可这样启动：
 

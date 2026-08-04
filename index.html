@@ -8,6 +8,23 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="mode-gate hidden" id="mode-gate" role="dialog" aria-modal="true" aria-labelledby="mode-gate-title">
+      <div class="mode-card">
+        <div class="eyebrow">WELCOME TO MO READER</div>
+        <h1 id="mode-gate-title">先选择阅读模式。</h1>
+        <p class="mode-gate-intro">在主界面或阅读界面都可以随时切换。</p>
+        <div class="mode-options">
+          <button class="mode-option" data-mode-choice="online" type="button">
+            <span class="mode-option-icon">↗</span>
+            <span><strong>在线模式</strong><small>优先调用已配置的 AI 接口、Google 翻译和 Lingva，网络不可用时回退本地能力。</small></span>
+          </button>
+          <button class="mode-option" data-mode-choice="offline" type="button">
+            <span class="mode-option-icon">⌂</span>
+            <span><strong>离线模式</strong><small>只使用本地 ECDICT 词典、本地 Argos 模型和系统语音，不访问网络。</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
     <div class="app-shell">
       <aside class="sidebar" aria-label="论文导航">
         <div class="brand-mark"><span class="brand-dot"></span><span>墨读</span></div>
@@ -26,8 +43,8 @@
         <div class="recent-list" id="recent-list"></div>
 
         <div class="sidebar-footer">
-          <div class="status-line"><span class="status-dot"></span><span>本地资料库已连接</span></div>
-          <button class="quiet-button" id="settings-button"><span>⚙</span><span>阅读设置</span></button>
+          <div class="status-line"><span class="status-dot"></span><span id="mode-status">未选择模式</span></div>
+          <button class="quiet-button" id="settings-button"><span>↔</span><span>切换模式</span></button>
         </div>
       </aside>
 
@@ -36,7 +53,7 @@
           <div class="breadcrumb"><span>我的论文</span><span class="crumb-slash">/</span><span id="topbar-context">论文库</span></div>
           <div class="topbar-actions">
             <button class="icon-button" id="search-button" aria-label="搜索论文">⌕</button>
-            <button class="profile-chip" aria-label="用户资料"><span>Z</span></button>
+            <button class="profile-chip" id="mode-chip" aria-label="切换阅读模式"><span>↔</span></button>
           </div>
         </header>
 
@@ -80,6 +97,7 @@
                 <button id="paper-search-submit" type="button" aria-label="搜索">↵</button>
                 <div class="paper-search-results hidden" id="paper-search-results"></div>
               </div>
+              <button class="toolbar-button" id="reader-mode-switch" aria-label="切换在线或离线模式">↔ 模式</button>
               <button class="toolbar-button" id="reader-vocab"><span>⌁</span> 生词本</button>
               <button class="toolbar-button filled" id="reader-settings">Aa</button>
             </div>
