@@ -7,3 +7,6 @@ node_modules/
 __pycache__/
 启动墨读.command
 墨读.app/
+.paper-reader-data/server.log
+.paper-reader-data/server.pid
+停止墨读.command
