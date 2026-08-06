@@ -5,12 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PAPERS_DIR = path.resolve(APP_ROOT, process.env.PAPER_READER_PAPERS_DIR || path.join("..", "论文库"));
 const DATA_DIR = path.join(APP_ROOT, ".paper-reader-data");
 const VOCAB_FILE = path.join(DATA_DIR, "vocabulary.json");
+const ANNOTATIONS_FILE = path.join(DATA_DIR, "annotations.json");
 const TRANSLATION_CACHE_FILE = path.join(DATA_DIR, "translation-cache.json");
 const SUMMARY_CACHE_FILE = path.join(DATA_DIR, "summary-cache.json");
 const LOCAL_DICTIONARY_DIR = path.join(DATA_DIR, "dictionary");
@@ -93,6 +95,7 @@ async function ensureDataFiles() {
   await fs.mkdir(LOCAL_DICTIONARY_DIR, { recursive: true });
   await fs.mkdir(LOCAL_TRANSLATION_DIR, { recursive: true });
   if (!(await exists(VOCAB_FILE))) await fs.writeFile(VOCAB_FILE, "[]\n", "utf8");
+  if (!(await exists(ANNOTATIONS_FILE))) await fs.writeFile(ANNOTATIONS_FILE, "{}\n", "utf8");
   if (!(await exists(TRANSLATION_CACHE_FILE))) await fs.writeFile(TRANSLATION_CACHE_FILE, "{}\n", "utf8");
   if (!(await exists(SUMMARY_CACHE_FILE))) await fs.writeFile(SUMMARY_CACHE_FILE, "{}\n", "utf8");
 }
@@ -118,16 +121,72 @@ function cleanText(text) {
     .trim();
 }
 
+function isGenericSummary(summary = "") {
+  return /围绕(?:该论文主题|“.*?”)展开，重点介绍研究问题、方法设计与主要发现。|论文中文概括会在接入 AI 后自动生成|检查更新|AnonymousAuthor|ShiruiWang/.test(summary);
+}
+
+function stripPdfLineNoise(text = "") {
+  return text
+    .replace(/^\s*\d+\s+/gm, "")
+    .replace(/\b(Submitted to|Confidential reviewer copy|Unauthorized sharing)[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function abstractFromExtractedText(text = "") {
+  const cleaned = text.replace(/\r/g, "\n");
+  const abstractMatch = cleaned.match(/\bAbstract\b([\s\S]{160,4200}?)(?:\n\s*(?:\d+\s+)?(?:1\s+)?Introduction\b|\n\s*Keywords?\b|\n\s*Figure\s+\d+|$)/i);
+  const start = cleaned.search(/\b(?:Large language models|Real-world medical work|Clinical decision-making|We (?:developed|introduce|created|evaluate)|This study)\b/i);
+  const introduction = cleaned.slice(Math.max(0, start)).search(/\n\s*(?:\d+\s+)?(?:1\s+)?Introduction\b/i);
+  const abstractLike = start >= 0
+    ? cleaned.slice(start, introduction > 0 ? start + introduction : start + 3600)
+    : "";
+  const candidate = abstractMatch?.[1] || abstractLike || cleaned.split(/\n\s*\n/).find((block) => /(?:we|this|large|clinical|model|benchmark|study)/i.test(block) && block.length > 160) || "";
+  return stripPdfLineNoise(candidate).slice(0, 4200);
+}
+
+function titleFromExtractedText(fileName, text = "") {
+  const fallback = fileName.replace(/\.pdf$/i, "");
+  const head = text.slice(0, Math.max(500, text.search(/\bAbstract\b/i) || 900));
+  const lines = head
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length >= 6)
+    .filter((line) => !/^(article|abstract|published|received|accepted|check for updates|affiliation|address|email|nature medicine|npj|a full list)/i.test(line))
+    .filter((line) => !/[@]|https?:\/\//i.test(line));
+  const titleLines = [];
+  for (const line of lines) {
+    if (/author|university|hospital|department|anonymous|affiliation/i.test(line)) break;
+    titleLines.push(line);
+    if (titleLines.join(" ").length > 120) break;
+  }
+  const title = titleLines.join(" ")
+    .replace(/\s+-\s+/g, "-")
+    .replace(/\bR\s*EAL\s*-\s*M\s*ED\b/gi, "REAL-MED")
+    .replace(/\bREAL\s*-\s*M\s*ED\b/gi, "REAL-MED")
+    .trim();
+  return title.length >= 12 ? title : fallback;
+}
+
+function compactChineseText(text = "", maxLength = 72) {
+  const compact = text.replace(/\s+/g, "").replace(/[“”"]+/g, "").trim();
+  if (compact.length <= maxLength) return compact;
+  const cut = compact.slice(0, maxLength + 18).search(/[。；;.!?！？]/);
+  if (cut >= 32 && cut <= maxLength) return compact.slice(0, cut + 1);
+  return `${compact.slice(0, maxLength)}…`;
+}
+
 async function pdfMeta(fileName, mode = "online") {
   const filePath = path.join(PAPERS_DIR, fileName);
   let title = fileName.replace(/\.pdf$/i, "");
   let pages = null;
   let size = null;
+  let metadataTitle = "";
   try {
     const { stdout } = await execFileAsync("pdfinfo", [filePath], { maxBuffer: 200_000 });
     const titleLine = stdout.match(/^Title:\s*(.+)$/m)?.[1]?.trim();
     const pagesLine = stdout.match(/^Pages:\s*(\d+)$/m)?.[1];
-    if (titleLine) title = titleLine;
+    if (titleLine) title = metadataTitle = titleLine;
     if (pagesLine) pages = Number(pagesLine);
     size = (await fs.stat(filePath)).size;
   } catch {
@@ -140,11 +199,14 @@ async function pdfMeta(fileName, mode = "online") {
       maxBuffer: 1_000_000,
     });
     abstract = cleanText(stdout);
+    if (!metadataTitle || title === fileName.replace(/\.pdf$/i, "")) {
+      title = titleFromExtractedText(fileName, abstract);
+    }
   } catch {
     // Keep a short fallback summary below.
   }
 
-  const summary = KNOWN_SUMMARIES[fileName] || await summarizePaper(fileName, title, abstract, mode);
+  const summary = KNOWN_SUMMARIES[fileName] || await summarizePaper(fileName, title, abstractFromExtractedText(abstract), mode);
   return {
     id: fileName,
     fileName,
@@ -156,10 +218,18 @@ async function pdfMeta(fileName, mode = "online") {
 }
 
 function inferSummary(text, title) {
-  const abstractMatch = text.match(/(?:abstract|摘要)\s*([\s\S]{80,900}?)(?:\n\s*introduction\b|\n\s*keywords?\b|\n\s*1\s+)/i);
-  const candidate = (abstractMatch?.[1] || text.split(/\n\s*\n/)[0] || "").replace(/\s+/g, " ").trim();
-  if (candidate) return `围绕该论文主题展开，重点介绍研究问题、方法设计与主要发现。`;
-  return `围绕“${title}”展开，重点介绍研究问题、方法设计与主要发现。`;
+  const lower = `${title}\n${text}`.toLowerCase();
+  const readableTitle = title.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (/benchmark/.test(lower) && /medical|clinical|health/.test(lower) && /llm|large language model|agent/.test(lower)) {
+    return "构建医学大模型评测基准，衡量其在真实临床任务中的安全性、有效性与执行能力。";
+  }
+  if (/clinical decision-making|diagnos/.test(lower) && /large language model|llm/.test(lower)) {
+    return "评估大语言模型在真实临床决策中的诊断、指南遵循与工作流适配能力。";
+  }
+  if (/safety/.test(lower) && /effectiveness/.test(lower) && /clinical/.test(lower)) {
+    return "提出临床安全与有效性双轨评测框架，用于衡量医学大模型的应用可靠性。";
+  }
+  return `梳理“${readableTitle}”的核心问题、研究方法与主要发现，便于快速判断是否精读。`;
 }
 
 async function remoteSummary(title, abstract) {
@@ -189,7 +259,7 @@ async function remoteSummary(title, abstract) {
 
 async function summarizePaper(fileName, title, abstract, mode = "online") {
   const cache = await readJson(SUMMARY_CACHE_FILE, {});
-  if (cache[fileName]) return cache[fileName];
+  if (cache[fileName] && !isGenericSummary(cache[fileName])) return cache[fileName];
   let summary = null;
   if (mode !== "offline") {
     try {
@@ -198,7 +268,16 @@ async function summarizePaper(fileName, title, abstract, mode = "online") {
       console.warn("AI summary unavailable:", error.message);
     }
   }
-  summary ||= inferSummary(abstract, title);
+  if (!summary && abstract) {
+    try {
+      const seed = abstract.match(/[^.!?。！？]+[.!?。！？]/g)?.slice(0, 2).join(" ") || abstract.slice(0, 650);
+      const translated = await localLongTextTranslation(seed);
+      summary = compactChineseText(translated);
+    } catch (error) {
+      console.warn("Local summary unavailable:", error.message);
+    }
+  }
+  summary = compactChineseText(summary || inferSummary(abstract, title));
   cache[fileName] = summary;
   await writeJson(SUMMARY_CACHE_FILE, cache);
   return summary;
@@ -598,6 +677,106 @@ async function readBody(req) {
   return body ? JSON.parse(body) : {};
 }
 
+async function readBinaryBody(req, maxBytes = 100 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      const error = new Error("单个文件不能超过 100 MB");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function uploadedPaperName(rawName) {
+  let decoded = rawName || "";
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // Keep the original header when a client sends an unescaped name.
+  }
+  const fileName = path.basename(decoded).replace(/[\0\r\n]/g, "").trim();
+  if (!fileName || !/\.pdf$/i.test(fileName)) return null;
+  return fileName.replace(/\.pdf$/i, ".pdf");
+}
+
+async function importPaper(res, req) {
+  const fileName = uploadedPaperName(req.headers["x-paper-file-name"]);
+  if (!fileName) return json(res, 400, { error: "只支持 PDF 文件" });
+  const filePath = path.join(PAPERS_DIR, fileName);
+  if (await exists(filePath)) return json(res, 409, { error: "论文库中已经有同名文件" });
+  const content = await readBinaryBody(req);
+  if (!content.length) return json(res, 400, { error: "文件内容为空" });
+  await fs.writeFile(filePath, content, { flag: "wx" });
+  return json(res, 200, { paper: { id: fileName, fileName } });
+}
+
+function safePaperId(value = "") {
+  const paperId = path.basename(String(value || "")).replace(/[\0\r\n]/g, "").trim();
+  return paperId.toLowerCase().endsWith(".pdf") ? paperId : null;
+}
+
+function normalizedAnnotationRect(rect) {
+  const page = Number(rect?.page);
+  const left = Number(rect?.left);
+  const top = Number(rect?.top);
+  const width = Number(rect?.width);
+  const height = Number(rect?.height);
+  if (!Number.isFinite(page) || !Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (page < 1 || width <= 0 || height <= 0) return null;
+  return {
+    page: Math.round(page),
+    left: Math.max(0, Math.min(1, left)),
+    top: Math.max(0, Math.min(1, top)),
+    width: Math.max(0, Math.min(1, width)),
+    height: Math.max(0, Math.min(1, height)),
+  };
+}
+
+async function listAnnotations(res, url) {
+  const paperId = safePaperId(url.searchParams.get("paper") || "");
+  if (!paperId) return json(res, 400, { error: "paper is required" });
+  const annotations = await readJson(ANNOTATIONS_FILE, {});
+  return json(res, 200, { annotations: annotations[paperId] || [] });
+}
+
+async function saveAnnotation(res, payload) {
+  const paperId = safePaperId(payload?.paperId);
+  if (!paperId) return json(res, 400, { error: "paperId is required" });
+  const rects = (payload?.rects || []).map(normalizedAnnotationRect).filter(Boolean).slice(0, 80);
+  if (!rects.length) return json(res, 400, { error: "annotation rects are required" });
+  const color = ["red", "blue", "green"].includes(payload.color) ? payload.color : "green";
+  const style = payload.style === "line" ? "line" : "marker";
+  const annotations = await readJson(ANNOTATIONS_FILE, {});
+  const item = {
+    id: crypto.randomUUID(),
+    paperId,
+    color,
+    style,
+    text: String(payload.text || "").slice(0, 3000),
+    rects,
+    createdAt: new Date().toISOString(),
+  };
+  annotations[paperId] = [item, ...(annotations[paperId] || [])].slice(0, 3000);
+  await writeJson(ANNOTATIONS_FILE, annotations);
+  return json(res, 200, { annotation: item, annotations: annotations[paperId] });
+}
+
+async function deleteAnnotations(res, payload) {
+  const paperId = safePaperId(payload?.paperId);
+  const ids = new Set(Array.isArray(payload?.ids) ? payload.ids.map(String) : []);
+  if (!paperId || !ids.size) return json(res, 400, { error: "paperId and ids are required" });
+  const annotations = await readJson(ANNOTATIONS_FILE, {});
+  const before = annotations[paperId] || [];
+  annotations[paperId] = before.filter((item) => !ids.has(item.id));
+  await writeJson(ANNOTATIONS_FILE, annotations);
+  return json(res, 200, { deleted: before.length - annotations[paperId].length, annotations: annotations[paperId] });
+}
+
 async function servePdf(res, fileName, req) {
   const safeName = path.basename(fileName);
   if (!safeName.toLowerCase().endsWith(".pdf")) return json(res, 404, { error: "PDF not found" });
@@ -707,6 +886,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (url.pathname === "/api/papers" && req.method === "GET") return json(res, 200, { papers: await listPapers(requestMode(req)) });
+    if (url.pathname === "/api/papers/import" && req.method === "POST") return importPaper(res, req);
+    if (url.pathname === "/api/annotations" && req.method === "GET") return listAnnotations(res, url);
+    if (url.pathname === "/api/annotations" && req.method === "POST") return saveAnnotation(res, await readBody(req));
+    if (url.pathname === "/api/annotations/delete" && req.method === "POST") return deleteAnnotations(res, await readBody(req));
     if (url.pathname === "/api/vocab" && req.method === "GET") return json(res, 200, { words: await readJson(VOCAB_FILE, []) });
     if (url.pathname === "/api/vocab/export" && req.method === "POST") {
       return exportVocabulary(res, await readBody(req));
@@ -745,7 +928,7 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(res, url.pathname);
   } catch (error) {
     console.error(error);
-    json(res, 500, { error: error.message || "Internal server error" });
+    json(res, error.statusCode || 500, { error: error.message || "Internal server error" });
   }
 });
 
