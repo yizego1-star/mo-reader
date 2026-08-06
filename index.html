@@ -81,7 +81,10 @@
 
           <div class="section-heading">
             <div><h2>全部论文</h2><p>放入这个文件夹的 PDF 会自动出现在这里。</p></div>
-            <div class="view-toggle"><button class="view-toggle-button selected">▦</button><button class="view-toggle-button">≡</button></div>
+            <div class="view-toggle" aria-label="论文陈列方式">
+              <button class="view-toggle-button selected" data-library-layout="grid" type="button" aria-label="网格陈列" title="网格陈列">▦</button>
+              <button class="view-toggle-button" data-library-layout="list" type="button" aria-label="列表陈列" title="列表陈列">≡</button>
+            </div>
           </div>
           <div class="paper-import-card" id="paper-import-card" tabindex="0" role="button" aria-label="添加论文或阅读资料">
             <div class="paper-import-icon">＋</div>
@@ -111,6 +114,19 @@
               <button class="toolbar-button" id="reader-vocab"><span>⌁</span> 生词本</button>
               <button class="toolbar-button filled" id="reader-settings">Aa</button>
             </div>
+          </div>
+          <div class="annotation-toolbar" id="annotation-toolbar" aria-label="批注工具">
+            <button class="annotation-tool-button" data-reader-zoom="in" type="button" aria-label="放大论文" title="放大论文">＋</button>
+            <button class="annotation-tool-button zoom-label" id="reader-zoom-label" data-reader-zoom="reset" type="button" aria-label="恢复默认缩放" title="恢复默认缩放">100</button>
+            <button class="annotation-tool-button" data-reader-zoom="out" type="button" aria-label="缩小论文" title="缩小论文">－</button>
+            <span class="annotation-divider" aria-hidden="true"></span>
+            <button class="annotation-tool-button" data-annotation-style="marker" type="button" aria-label="透明马克笔" title="透明马克笔">▰</button>
+            <button class="annotation-tool-button" data-annotation-style="line" type="button" aria-label="实线笔" title="实线笔">▁</button>
+            <button class="annotation-color-button green" data-annotation-color="green" type="button" aria-label="绿色批注" title="绿色批注"></button>
+            <button class="annotation-color-button blue" data-annotation-color="blue" type="button" aria-label="蓝色批注" title="蓝色批注"></button>
+            <button class="annotation-color-button red" data-annotation-color="red" type="button" aria-label="红色批注" title="红色批注"></button>
+            <button class="annotation-tool-button" data-annotation-eraser type="button" aria-label="擦除批注" title="擦除批注">⌫</button>
+            <button class="annotation-tool-button" data-annotation-off type="button" aria-label="退出批注" title="退出批注">×</button>
           </div>
           <div class="reader-layout">
             <div class="pdf-column">

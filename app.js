@@ -8,6 +8,13 @@ const state = {
   mode: localStorage.getItem("mo-reader-mode") || "online",
   papers: [],
   vocabulary: [],
+  annotations: [],
+  annotationTool: "none",
+  annotationStyle: "marker",
+  annotationColor: "green",
+  readerZoom: Number(localStorage.getItem("mo-reader-zoom") || 1),
+  renderToken: 0,
+  libraryLayout: localStorage.getItem("mo-reader-library-layout") || "grid",
   currentPaper: null,
   currentPdf: null,
   currentSelection: null,
@@ -62,8 +69,13 @@ const els = {
   searchInput: $("#paper-search-input"),
   searchSubmit: $("#paper-search-submit"),
   searchResults: $("#paper-search-results"),
+  annotationToolbar: $("#annotation-toolbar"),
+  readerZoomLabel: $("#reader-zoom-label"),
   toast: $("#toast"),
 };
+
+state.readerZoom = Math.min(1.8, Math.max(0.75, Number.isFinite(state.readerZoom) ? state.readerZoom : 1));
+if (!["grid", "list"].includes(state.libraryLayout)) state.libraryLayout = "grid";
 
 const modeLabels = { online: "在线模式", offline: "离线模式" };
 
@@ -91,6 +103,10 @@ async function chooseMode(mode) {
 
 function escapeHtml(value = "") {
   return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function formatDate(value) {
@@ -246,10 +262,12 @@ function renderLibrary() {
   els.statPapers.textContent = state.papers.length;
   els.vocabCount.textContent = state.vocabulary.length;
   els.statWords.textContent = state.vocabulary.length;
+  updateLibraryLayoutUI();
   if (!state.papers.length) {
     els.paperGrid.innerHTML = `<div class="empty-state">暂时还没有 PDF。把论文放进当前文件夹，然后点击“刷新论文库”。</div>`;
     return;
   }
+  els.paperGrid.classList.toggle("list-view", state.libraryLayout === "list");
   els.paperGrid.innerHTML = state.papers.map((paper) => `
     <article class="paper-card" data-paper-id="${escapeHtml(paper.id)}">
       <div class="paper-card-top"><span class="paper-type">PDF · ${paper.pages || "—"} 页</span><span class="paper-card-more">···</span></div>
@@ -259,6 +277,20 @@ function renderLibrary() {
     </article>
   `).join("");
   $$(".paper-card").forEach((card) => card.addEventListener("click", () => openReader(card.dataset.paperId)));
+}
+
+function updateLibraryLayoutUI() {
+  els.paperGrid?.classList.toggle("list-view", state.libraryLayout === "list");
+  $$("[data-library-layout]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.libraryLayout === state.libraryLayout);
+  });
+}
+
+function setLibraryLayout(layout) {
+  if (!["grid", "list"].includes(layout)) return;
+  state.libraryLayout = layout;
+  localStorage.setItem("mo-reader-library-layout", layout);
+  updateLibraryLayoutUI();
 }
 
 function renderRecent() {
@@ -298,25 +330,45 @@ async function openReader(paperId) {
   els.sidePaperSummary.textContent = paper.summary;
   els.sidePageCount.textContent = paper.pages ? `${paper.pages} 页` : "PDF";
   resetPaperSearch();
+  state.annotations = [];
   els.pdfScroll.innerHTML = "";
+  els.readerLoading.innerHTML = `<div class="loading-spinner"></div><span>正在打开论文…</span>`;
   els.readerLoading.classList.remove("hidden");
   closePopover();
   try {
+    state.annotations = (await requestJson(`/api/annotations?paper=${encodeURIComponent(paper.fileName)}`)).annotations || [];
     state.currentPdf = await pdfjsLib.getDocument(`/pdf/${encodeURIComponent(paper.fileName)}`).promise;
-    for (let pageNumber = 1; pageNumber <= state.currentPdf.numPages; pageNumber += 1) {
-      await renderPdfPage(pageNumber);
-    }
+    await renderCurrentPdf();
     els.readerLoading.classList.add("hidden");
   } catch (error) {
     els.readerLoading.innerHTML = `<div style="font-size:28px;margin-bottom:6px">⌁</div><span>这篇 PDF 暂时无法打开：${escapeHtml(error.message)}</span>`;
   }
 }
 
-async function renderPdfPage(pageNumber) {
+async function renderCurrentPdf({ preserveScroll = false } = {}) {
+  if (!state.currentPdf) return;
+  const token = state.renderToken + 1;
+  state.renderToken = token;
+  const maxScroll = Math.max(1, els.pdfScroll.scrollHeight - els.pdfScroll.clientHeight);
+  const scrollRatio = preserveScroll ? els.pdfScroll.scrollTop / maxScroll : 0;
+  els.pdfScroll.innerHTML = "";
+  for (let pageNumber = 1; pageNumber <= state.currentPdf.numPages; pageNumber += 1) {
+    if (token !== state.renderToken) return;
+    await renderPdfPage(pageNumber, token);
+  }
+  if (preserveScroll && token === state.renderToken) {
+    const nextMaxScroll = Math.max(0, els.pdfScroll.scrollHeight - els.pdfScroll.clientHeight);
+    els.pdfScroll.scrollTop = nextMaxScroll * scrollRatio;
+  }
+}
+
+async function renderPdfPage(pageNumber, token = state.renderToken) {
+  if (token !== state.renderToken) return;
   const page = await state.currentPdf.getPage(pageNumber);
   const baseViewport = page.getViewport({ scale: 1 });
   const availableWidth = Math.max(300, els.pdfScroll.clientWidth - 28);
-  const targetWidth = Math.min(760, availableWidth);
+  const fitWidth = Math.min(760, availableWidth);
+  const targetWidth = clamp(fitWidth * state.readerZoom, 320, 1600);
   const scale = targetWidth / baseViewport.width;
   const viewport = page.getViewport({ scale });
   const wrapper = document.createElement("div");
@@ -324,6 +376,7 @@ async function renderPdfPage(pageNumber) {
   wrapper.dataset.pageNumber = pageNumber;
   wrapper.style.width = `${viewport.width}px`;
   wrapper.style.height = `${viewport.height}px`;
+  wrapper.style.setProperty("--scale-factor", viewport.scale);
   const canvas = document.createElement("canvas");
   const outputScale = window.devicePixelRatio || 1;
   canvas.width = Math.floor(viewport.width * outputScale);
@@ -331,36 +384,41 @@ async function renderPdfPage(pageNumber) {
   canvas.style.width = `${viewport.width}px`;
   canvas.style.height = `${viewport.height}px`;
   wrapper.appendChild(canvas);
+  const annotationLayer = document.createElement("div");
+  annotationLayer.className = "annotation-layer";
+  wrapper.appendChild(annotationLayer);
   const textLayer = document.createElement("div");
   textLayer.className = "textLayer";
-  textLayer.style.width = `${viewport.width}px`;
-  textLayer.style.height = `${viewport.height}px`;
+  textLayer.dataset.pageNumber = pageNumber;
   wrapper.appendChild(textLayer);
   els.pdfScroll.appendChild(wrapper);
 
   const context = canvas.getContext("2d", { alpha: false });
   context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
   await page.render({ canvasContext: context, viewport }).promise;
-  const textContent = await page.getTextContent();
-  buildSelectableTextLayer(textLayer, textContent, viewport);
+  if (token !== state.renderToken) {
+    wrapper.remove();
+    return;
+  }
+  const textContent = await page.getTextContent({ includeMarkedContent: true, disableNormalization: true });
+  await buildSelectableTextLayer(textLayer, textContent, viewport);
+  if (token !== state.renderToken) {
+    wrapper.remove();
+    return;
+  }
+  renderAnnotationsForPage(pageNumber);
 }
 
-function buildSelectableTextLayer(textLayer, textContent, viewport) {
-  for (const item of textContent.items) {
-    if (!item.str) continue;
-    const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
-    const angle = Math.atan2(transform[1], transform[0]);
-    const fontHeight = Math.max(1, Math.hypot(transform[2], transform[3]));
-    const scaleX = Math.max(0.2, Math.hypot(transform[0], transform[1]) / fontHeight);
-    const span = document.createElement("span");
-    span.textContent = item.str;
-    span.style.left = `${transform[4]}px`;
-    span.style.top = `${transform[5] - fontHeight}px`;
-    span.style.fontSize = `${fontHeight}px`;
-    span.style.height = `${fontHeight}px`;
-    span.style.transform = `rotate(${angle}rad) scaleX(${scaleX})`;
-    textLayer.appendChild(span);
-  }
+async function buildSelectableTextLayer(textLayer, textContent, viewport) {
+  const textLayerTask = new pdfjsLib.TextLayer({
+    textContentSource: textContent,
+    container: textLayer,
+    viewport,
+  });
+  await textLayerTask.render();
+  const endOfContent = document.createElement("div");
+  endOfContent.className = "endOfContent";
+  textLayer.appendChild(endOfContent);
 }
 
 function nodeInTextLayer(node) {
@@ -559,6 +617,163 @@ function markSelection(selected) {
   });
 }
 
+function currentAnnotationMode() {
+  return state.annotationTool === "pen" || state.annotationTool === "eraser";
+}
+
+function pageForRect(rect) {
+  return $$(".pdf-page").find((page) => {
+    const pageRect = page.getBoundingClientRect();
+    return rect.right > pageRect.left && rect.left < pageRect.right && rect.bottom > pageRect.top && rect.top < pageRect.bottom;
+  });
+}
+
+function mergeSelectionClientRects(rects) {
+  const merged = [];
+  rects
+    .filter((rect) => rect.width > 1 && rect.height > 1)
+    .sort((a, b) => a.top - b.top || a.left - b.left)
+    .forEach((rect) => {
+      const current = merged[merged.length - 1];
+      const sameLine = current && current.page === rect.page && Math.abs(current.top - rect.top) < Math.max(5, rect.height * 0.55);
+      const close = current && rect.left - current.right < Math.max(12, rect.height * 1.4);
+      if (sameLine && close) {
+        current.right = Math.max(current.right, rect.right);
+        current.bottom = Math.max(current.bottom, rect.bottom);
+        return;
+      }
+      merged.push({ ...rect });
+    });
+  return merged;
+}
+
+function annotationRectsForRange(range) {
+  if (!range) return [];
+  const rawRects = [...range.getClientRects()].map((rect) => {
+    const page = pageForRect(rect);
+    if (!page) return null;
+    return { rect, page, pageNumber: Number(page.dataset.pageNumber || 0) };
+  }).filter(Boolean);
+  const merged = mergeSelectionClientRects(rawRects.map(({ rect, page, pageNumber }) => ({
+    page,
+    pageNumber,
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  })));
+  return merged.map((rect) => {
+    const pageRect = rect.page.getBoundingClientRect();
+    const left = Math.max(rect.left, pageRect.left);
+    const top = Math.max(rect.top, pageRect.top);
+    const right = Math.min(rect.right, pageRect.right);
+    const bottom = Math.min(rect.bottom, pageRect.bottom);
+    return {
+      page: rect.pageNumber,
+      left: (left - pageRect.left) / pageRect.width,
+      top: (top - pageRect.top) / pageRect.height,
+      width: Math.max(0, right - left) / pageRect.width,
+      height: Math.max(0, bottom - top) / pageRect.height,
+    };
+  }).filter((rect) => rect.page && rect.width > 0 && rect.height > 0);
+}
+
+function renderAnnotationsForPage(pageNumber) {
+  const page = $(`.pdf-page[data-page-number="${pageNumber}"]`);
+  const layer = page?.querySelector(".annotation-layer");
+  if (!layer) return;
+  layer.innerHTML = "";
+  state.annotations.forEach((annotation) => {
+    annotation.rects?.filter((rect) => Number(rect.page) === Number(pageNumber)).forEach((rect) => {
+      const mark = document.createElement("i");
+      mark.className = "annotation-mark";
+      mark.dataset.annotationId = annotation.id;
+      mark.dataset.annotationStyle = annotation.style || "marker";
+      mark.dataset.annotationColor = annotation.color || "green";
+      mark.style.left = `${rect.left * 100}%`;
+      mark.style.top = `${rect.top * 100}%`;
+      mark.style.width = `${rect.width * 100}%`;
+      mark.style.height = `${rect.height * 100}%`;
+      layer.appendChild(mark);
+    });
+  });
+}
+
+function renderAllAnnotations() {
+  $$(".pdf-page").forEach((page) => renderAnnotationsForPage(page.dataset.pageNumber));
+}
+
+async function addAnnotationFromSelection(selected) {
+  const rects = annotationRectsForRange(selected.range);
+  if (!rects.length || !state.currentPaper) {
+    showToast("没有识别到可批注的文本");
+    return;
+  }
+  const payload = await requestJson("/api/annotations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      paperId: state.currentPaper.fileName,
+      color: state.annotationColor,
+      style: state.annotationStyle,
+      text: selected.text,
+      rects,
+    }),
+  });
+  state.annotations = payload.annotations || [payload.annotation, ...state.annotations].filter(Boolean);
+  renderAllAnnotations();
+  showToast("已批注");
+}
+
+function rectsOverlap(first, second) {
+  if (Number(first.page) !== Number(second.page)) return false;
+  return first.left < second.left + second.width
+    && first.left + first.width > second.left
+    && first.top < second.top + second.height
+    && first.top + first.height > second.top;
+}
+
+async function eraseAnnotationsFromSelection(selected) {
+  const rects = annotationRectsForRange(selected.range);
+  if (!rects.length || !state.currentPaper) {
+    showToast("先选中要擦除的批注");
+    return;
+  }
+  const ids = state.annotations
+    .filter((annotation) => annotation.rects?.some((savedRect) => rects.some((rect) => rectsOverlap(savedRect, rect))))
+    .map((annotation) => annotation.id);
+  if (!ids.length) {
+    showToast("这段没有批注");
+    return;
+  }
+  const payload = await requestJson("/api/annotations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ paperId: state.currentPaper.fileName, ids }),
+  });
+  state.annotations = payload.annotations || state.annotations.filter((annotation) => !ids.includes(annotation.id));
+  renderAllAnnotations();
+  showToast(`已擦除 ${ids.length} 条批注`);
+}
+
+async function handleAnnotationSelection(selected) {
+  if (!selected) return;
+  clearSelectionMarkers();
+  clearTimeout(handleSelection.timer);
+  state.currentSelection = null;
+  state.lastSelectionKey = "";
+  try {
+    if (state.annotationTool === "eraser") await eraseAnnotationsFromSelection(selected);
+    else await addAnnotationFromSelection(selected);
+  } catch (error) {
+    showToast(error.message || "批注失败");
+  } finally {
+    window.getSelection()?.removeAllRanges();
+  }
+}
+
 function wordFromSpanAtPoint(span, x) {
   return wordRangeAtPoint(span, x)?.text || "";
 }
@@ -670,6 +885,10 @@ function manualSelectionFromGesture() {
 }
 
 async function handleSelection(selected = selectedTextFromPage()) {
+  if (currentAnnotationMode()) {
+    await handleAnnotationSelection(selected);
+    return;
+  }
   if (!selected) return;
   const key = `${selected.type}:${selected.text}`;
   if (key === state.lastSelectionKey) return;
@@ -973,6 +1192,59 @@ function resetPaperSearch() {
   els.searchResults?.classList.add("hidden");
 }
 
+function updateAnnotationUI() {
+  document.body.classList.toggle("annotation-mode", state.annotationTool === "pen");
+  document.body.classList.toggle("eraser-mode", state.annotationTool === "eraser");
+  $$("[data-annotation-style]").forEach((button) => {
+    button.classList.toggle("selected", state.annotationTool === "pen" && button.dataset.annotationStyle === state.annotationStyle);
+  });
+  $$("[data-annotation-color]").forEach((button) => {
+    button.classList.toggle("selected", state.annotationTool === "pen" && button.dataset.annotationColor === state.annotationColor);
+  });
+  $("[data-annotation-eraser]")?.classList.toggle("selected", state.annotationTool === "eraser");
+  $("[data-annotation-off]")?.classList.toggle("selected", state.annotationTool === "none");
+}
+
+function activateAnnotationPen(options = {}) {
+  state.annotationTool = "pen";
+  if (options.style) state.annotationStyle = options.style;
+  if (options.color) state.annotationColor = options.color;
+  closePopover();
+  updateAnnotationUI();
+}
+
+function activateAnnotationEraser() {
+  state.annotationTool = "eraser";
+  closePopover();
+  updateAnnotationUI();
+}
+
+function deactivateAnnotationTools() {
+  state.annotationTool = "none";
+  updateAnnotationUI();
+}
+
+function updateReaderZoomUI() {
+  if (els.readerZoomLabel) els.readerZoomLabel.textContent = `${Math.round(state.readerZoom * 100)}`;
+  $$("[data-reader-zoom]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.readerZoom === "reset" && Math.abs(state.readerZoom - 1) < 0.01);
+  });
+}
+
+async function setReaderZoom(nextZoom) {
+  const zoom = Math.round(clamp(nextZoom, 0.75, 1.8) * 100) / 100;
+  if (Math.abs(zoom - state.readerZoom) < 0.01) return;
+  state.readerZoom = zoom;
+  localStorage.setItem("mo-reader-zoom", String(zoom));
+  updateReaderZoomUI();
+  closePopover();
+  if (!state.currentPdf) return;
+  els.readerLoading.innerHTML = `<div class="loading-spinner"></div><span>正在调整论文大小…</span>`;
+  els.readerLoading.classList.remove("hidden");
+  await renderCurrentPdf({ preserveScroll: true });
+  els.readerLoading.classList.add("hidden");
+}
+
 function closePopover() {
   els.explainPopover.classList.add("hidden");
   clearTimeout(handleSelection.timer);
@@ -987,6 +1259,7 @@ function closePopover() {
 }
 
 document.addEventListener("selectionchange", () => {
+  if (currentAnnotationMode()) return;
   if (selectionGesture.active || selectionGesture.start) return;
   clearTimeout(handleSelection.timer);
   handleSelection.timer = setTimeout(handleSelection, 120);
@@ -1012,7 +1285,7 @@ document.addEventListener("mouseup", (event) => {
   // 在 mouseup 这一刻启动单词发音，保留用户点击带来的播放权限；句子不触发。
   const gestureDistance = Math.hypot(event.clientX - selectionGesture.start.x, event.clientY - selectionGesture.start.y);
   const isClick = gestureDistance < CLICK_DRAG_THRESHOLD;
-  if (isClick) {
+  if (isClick && !currentAnnotationMode()) {
     const span = spanAtPoint(selectionGesture.start.x, selectionGesture.start.y, selectionGesture.start.target);
     const wordSelection = span && wordRangeAtPoint(span, selectionGesture.start.x, selectionGesture.start.y);
     if (wordSelection?.text) playWordPronunciation(wordSelection.text);
@@ -1035,7 +1308,8 @@ document.addEventListener("mouseup", (event) => {
       }
       selectionGesture.start = null;
       selectionGesture.end = null;
-      handleSelection(selected);
+      if (currentAnnotationMode()) handleAnnotationSelection(selected);
+      else handleSelection(selected);
     } else {
       closePopover();
     }
@@ -1108,6 +1382,34 @@ els.modeChip?.addEventListener("click", showModeGate);
 $("#reader-mode-switch")?.addEventListener("click", showModeGate);
 $$("[data-mode-choice]").forEach((button) => button.addEventListener("click", () => chooseMode(button.dataset.modeChoice)));
 $("#reader-settings").addEventListener("click", () => showToast("阅读字号设置即将加入"));
+$$("[data-library-layout]").forEach((button) => button.addEventListener("click", () => setLibraryLayout(button.dataset.libraryLayout)));
+$$("[data-reader-zoom]").forEach((button) => button.addEventListener("click", async (event) => {
+  event.stopPropagation();
+  const action = button.dataset.readerZoom;
+  try {
+    if (action === "in") await setReaderZoom(state.readerZoom + 0.15);
+    if (action === "out") await setReaderZoom(state.readerZoom - 0.15);
+    if (action === "reset") await setReaderZoom(1);
+  } catch (error) {
+    showToast(error.message || "缩放失败");
+  }
+}));
+$$("[data-annotation-style]").forEach((button) => button.addEventListener("click", (event) => {
+  event.stopPropagation();
+  activateAnnotationPen({ style: button.dataset.annotationStyle });
+}));
+$$("[data-annotation-color]").forEach((button) => button.addEventListener("click", (event) => {
+  event.stopPropagation();
+  activateAnnotationPen({ color: button.dataset.annotationColor });
+}));
+$("[data-annotation-eraser]")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  activateAnnotationEraser();
+});
+$("[data-annotation-off]")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  deactivateAnnotationTools();
+});
 
 let paperSearchTimer;
 els.searchInput.addEventListener("mousedown", (event) => event.stopPropagation());
@@ -1145,6 +1447,9 @@ document.addEventListener("mousedown", (event) => {
 });
 
 updateModeUI();
+updateAnnotationUI();
+updateReaderZoomUI();
+updateLibraryLayoutUI();
 els.modeGate?.classList.add("hidden");
 loadLibrary().catch((error) => {
   els.paperGrid.innerHTML = `<div class="empty-state">无法连接论文库：${escapeHtml(error.message)}</div>`;
