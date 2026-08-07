@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title>墨读</title>
+  <rect width="1024" height="1024" rx="236" fill="#08291f"/>
+  <!-- 一道收住的墨迹：安静，而不是张扬。 -->
+  <path d="M263 344C369 248 562 224 749 316C776 329 785 363 767 389C750 414 716 421 688 408C543 341 397 356 301 435C274 457 234 451 216 423C198 394 220 365 263 344Z" fill="#235e49"/>
+  <circle cx="738" cy="330" r="25" fill="#90c29e"/>
+  <!-- 摊开的书页同时形成安静注视文字的轮廓。 -->
+  <path d="M205 508C205 465 243 438 285 445C370 458 442 493 512 551V791C448 731 372 700 285 690C240 685 205 649 205 606Z" fill="#e8f1eb"/>
+  <path d="M819 508C819 465 781 438 739 445C654 458 582 493 512 551V791C576 731 652 700 739 690C784 685 819 649 819 606Z" fill="#90c29e"/>
+  <path d="M512 551V791" stroke="#467864" stroke-width="24" stroke-linecap="round"/>
+  <path d="M290 542C356 554 413 579 468 616M734 542C668 554 611 579 556 616" fill="none" stroke="#6f9f83" stroke-width="18" stroke-linecap="round" opacity=".72"/>
+</svg>

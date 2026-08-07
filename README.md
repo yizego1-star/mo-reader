@@ -6,6 +6,16 @@
 
 需要 Node.js 18+、Python 3.10+。
 
+### macOS 一键安装
+
+将下面这一条命令粘贴到 macOS「终端」运行，即可下载、配置离线词典与翻译模型，并生成可双击打开的 `墨读.app`。首次安装会下载约 130MB 的离线资源；若电脑没有 Node.js 或 Python，安装器会通过 Homebrew 自动准备它们。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-sentence-translation/install-mac.sh | zsh
+```
+
+安装后应用位于 `~/Applications/墨读/墨读.app`。此安装器目前只支持 macOS。
+
 ```bash
 npm install
 python3 -m pip install -r requirements.txt
