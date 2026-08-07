@@ -4,6 +4,7 @@ $Repository = 'https://github.com/yizego1-star/mo-reader'
 $Ref = if ($env:MO_READER_REF) { $env:MO_READER_REF } else { 'agent/local-sentence-translation' }
 $InstallDir = if ($env:MO_READER_INSTALL_DIR) { $env:MO_READER_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA '墨读' }
 $ArchiveUrl = "$Repository/archive/refs/heads/$Ref.zip"
+$ChinaMode = $env:MO_READER_CN -eq '1'
 
 function Write-Mo([string]$Message) { Write-Host "`n墨读  $Message" -ForegroundColor Green }
 function Fail([string]$Message) { throw "安装失败：$Message" }
@@ -17,6 +18,15 @@ function Install-WingetPackage([string]$Id) {
 
 if ($env:OS -ne 'Windows_NT') { Fail '此安装器只支持 Windows。' }
 if (Test-Path -LiteralPath $InstallDir) { Fail "安装目录已存在：$InstallDir`n如需重新安装，请先移走该文件夹，或设置 MO_READER_INSTALL_DIR。" }
+
+if ($ChinaMode) {
+  # 脚本本身仍由 GitHub 原站下载；仅把较大的依赖与资源切换到镜像。
+  $ArchiveUrl = if ($env:MO_READER_ARCHIVE_URL) { $env:MO_READER_ARCHIVE_URL } else { "https://ghfast.top/$Repository/archive/refs/heads/$Ref.zip" }
+  $env:npm_config_registry = 'https://registry.npmmirror.com'
+  $env:PIP_INDEX_URL = 'https://mirrors.aliyun.com/pypi/simple'
+  $env:PAPER_READER_DICTIONARY_URL = 'https://ghfast.top/https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv'
+  Write-M '已启用中国大陆加速镜像。'
+}
 
 if (-not (Test-Command 'node')) {
   Write-M '正在安装 Node.js…'
@@ -57,10 +67,29 @@ try {
   Write-M '正在安装阅读器依赖…'
   Push-Location $InstallDir
   try {
-    & (Join-Path (Split-Path $Node) 'npm.cmd') install --omit=dev
+    $npm = Join-Path (Split-Path $Node) 'npm.cmd'
+    & $npm install --omit=dev
+    if ($LASTEXITCODE -ne 0 -and $ChinaMode) {
+      Write-M 'npm 镜像暂时不可用，正在回退官方源…'
+      $env:npm_config_registry = 'https://registry.npmjs.org'
+      & $npm install --omit=dev
+    }
+    if ($LASTEXITCODE -ne 0) { Fail 'npm 依赖安装失败。' }
     & $PythonExe @($PythonArgs + @('-m', 'venv', '.venv'))
     & "$InstallDir\.venv\Scripts\python.exe" -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0 -and $ChinaMode) {
+      Write-M 'Python 镜像暂时不可用，正在回退官方源…'
+      $env:PIP_INDEX_URL = ''
+      & "$InstallDir\.venv\Scripts\python.exe" -m pip install --upgrade pip
+    }
+    if ($LASTEXITCODE -ne 0) { Fail 'pip 升级失败。' }
     & "$InstallDir\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0 -and $ChinaMode) {
+      Write-M 'Python 镜像暂时不可用，正在回退官方源…'
+      $env:PIP_INDEX_URL = ''
+      & "$InstallDir\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+    }
+    if ($LASTEXITCODE -ne 0) { Fail 'Python 依赖安装失败。' }
     Write-M '正在准备离线词典与句子翻译模型（首次约需下载 130MB）…'
     & "$InstallDir\.venv\Scripts\python.exe" setup_local_dictionary.py
     $env:ARGOS_PACKAGES_DIR = "$InstallDir\.paper-reader-data\translation-models"

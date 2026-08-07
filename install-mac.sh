@@ -6,6 +6,7 @@ REPOSITORY="https://github.com/yizego1-star/mo-reader"
 REF="${MO_READER_REF:-agent/local-sentence-translation}"
 INSTALL_DIR="${MO_READER_INSTALL_DIR:-$HOME/Applications/墨读}"
 ARCHIVE_URL="${REPOSITORY}/archive/refs/heads/${REF}.tar.gz"
+CHINA_MODE="${MO_READER_CN:-0}"
 
 say() { print -P "\n%F{green}墨读%f  $1"; }
 fail() { print -P "%F{red}安装失败：%f$1" >&2; exit 1; }
@@ -33,6 +34,15 @@ ensure_runtime() {
 command -v curl >/dev/null 2>&1 || fail "系统没有 curl。"
 command -v tar >/dev/null 2>&1 || fail "系统没有 tar。"
 
+if [[ "$CHINA_MODE" == "1" ]]; then
+  # 安装脚本本身仍由 GitHub 原站下载；仅把较大的依赖与资源切换到镜像。
+  ARCHIVE_URL="${MO_READER_ARCHIVE_URL:-https://ghfast.top/${REPOSITORY}/archive/refs/heads/${REF}.tar.gz}"
+  export npm_config_registry="https://registry.npmmirror.com"
+  export PIP_INDEX_URL="https://mirrors.aliyun.com/pypi/simple"
+  export PAPER_READER_DICTIONARY_URL="https://ghfast.top/https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv"
+  say "已启用中国大陆加速镜像。"
+fi
+
 ensure_runtime
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-reader.XXXXXX")"
@@ -44,10 +54,31 @@ tar -xzf "$TEMP_DIR/mo-reader.tar.gz" --strip-components=1 -C "$INSTALL_DIR"
 
 say "正在安装阅读器依赖…"
 cd "$INSTALL_DIR"
-npm install --omit=dev
+if ! npm install --omit=dev; then
+  if [[ "$CHINA_MODE" == "1" ]]; then
+    say "npm 镜像暂时不可用，正在回退官方源…"
+    npm_config_registry="https://registry.npmjs.org" npm install --omit=dev
+  else
+    fail "npm 依赖安装失败。"
+  fi
+fi
 python3 -m venv .venv
-"$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
-"$INSTALL_DIR/.venv/bin/python" -m pip install -r requirements.txt
+if ! "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip; then
+  if [[ "$CHINA_MODE" == "1" ]]; then
+    say "Python 镜像暂时不可用，正在回退官方源…"
+    PIP_INDEX_URL="" "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
+  else
+    fail "pip 升级失败。"
+  fi
+fi
+if ! "$INSTALL_DIR/.venv/bin/python" -m pip install -r requirements.txt; then
+  if [[ "$CHINA_MODE" == "1" ]]; then
+    say "Python 镜像暂时不可用，正在回退官方源…"
+    PIP_INDEX_URL="" "$INSTALL_DIR/.venv/bin/python" -m pip install -r requirements.txt
+  else
+    fail "Python 依赖安装失败。"
+  fi
+fi
 
 say "正在准备离线词典与句子翻译模型（首次约需下载 130MB）…"
 "$INSTALL_DIR/.venv/bin/python" setup_local_dictionary.py

@@ -3,6 +3,7 @@
 
 import csv
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -10,7 +11,8 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_ROOT = APP_ROOT / ".paper-reader-data" / "dictionary"
-SOURCE_URL = "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv"
+OFFICIAL_SOURCE_URL = "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv"
+SOURCE_URL = os.environ.get("PAPER_READER_DICTIONARY_URL", OFFICIAL_SOURCE_URL)
 RAW_FILE = DATA_ROOT / "ecdict.csv"
 POS_LABELS = {
     "n": "名词",
@@ -51,7 +53,13 @@ def main():
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     if not RAW_FILE.exists():
         print("正在下载 ECDICT 本地英汉词典（约 63 MB）……")
-        urllib.request.urlretrieve(SOURCE_URL, RAW_FILE)
+        try:
+            urllib.request.urlretrieve(SOURCE_URL, RAW_FILE)
+        except Exception:
+            if SOURCE_URL == OFFICIAL_SOURCE_URL:
+                raise
+            print("镜像下载失败，正在回退官方词典源…")
+            urllib.request.urlretrieve(OFFICIAL_SOURCE_URL, RAW_FILE)
 
     buckets = {chr(code): {} for code in range(ord("a"), ord("z") + 1)}
     with RAW_FILE.open("r", encoding="utf-8", newline="") as stream:

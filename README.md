@@ -26,6 +26,22 @@ irm https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-sentenc
 
 安装后文件位于 `%LOCALAPPDATA%\墨读`，以后双击桌面“墨读”即可启动。
 
+### 中国大陆网络加速安装
+
+大陆网络环境建议使用下方命令。安装脚本本身仍从 GitHub 原站获取；较大的源码包、npm、PyPI 和本地词典下载会优先使用镜像，镜像不可用时会自动回退官方源。
+
+macOS：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-sentence-translation/install-mac.sh | MO_READER_CN=1 zsh
+```
+
+Windows PowerShell：
+
+```powershell
+$env:MO_READER_CN='1'; irm https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-sentence-translation/install-windows.ps1 | iex
+```
+
 ```bash
 npm install
 python3 -m pip install -r requirements.txt
