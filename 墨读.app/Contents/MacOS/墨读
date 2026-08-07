@@ -1,4 +1,16 @@
 #!/bin/zsh
 
-APP_DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
-open -a Terminal "$APP_DIR/启动墨读.command"
+# Finder 双击入口：通过 macOS 打开启动脚本。
+# 论文目录受 File Provider 管理时，直接从 App 读取外部脚本会被系统拒绝；
+# 由 Launch Services 打开 .command 则能得到正常的用户文件访问权限。
+set -u
+APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+LAUNCHER="$APP_DIR/启动墨读.command"
+
+if [[ -f "$LAUNCHER" ]]; then
+  /usr/bin/open "$LAUNCHER"
+  exit 0
+fi
+
+osascript -e 'display alert "墨读启动失败" message "找不到启动脚本：启动墨读.command"'
+exit 1

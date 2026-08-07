@@ -777,6 +777,33 @@ async function deleteAnnotations(res, payload) {
   return json(res, 200, { deleted: before.length - annotations[paperId].length, annotations: annotations[paperId] });
 }
 
+async function updateAnnotationRects(res, payload) {
+  const paperId = safePaperId(payload?.paperId);
+  const rawUpdates = Array.isArray(payload?.updates) ? payload.updates : [];
+  if (!paperId || !rawUpdates.length) return json(res, 400, { error: "paperId and updates are required" });
+  const updates = new Map(rawUpdates.slice(0, 3000).map((update) => {
+    const id = String(update?.id || "");
+    const rects = (Array.isArray(update?.rects) ? update.rects : [])
+      .map(normalizedAnnotationRect)
+      .filter(Boolean)
+      .slice(0, 160);
+    return [id, rects];
+  }).filter(([id]) => id));
+  if (!updates.size) return json(res, 400, { error: "valid annotation updates are required" });
+  const annotations = await readJson(ANNOTATIONS_FILE, {});
+  const before = annotations[paperId] || [];
+  let changed = 0;
+  annotations[paperId] = before.flatMap((item) => {
+    if (!updates.has(item.id)) return [item];
+    changed += 1;
+    const rects = updates.get(item.id);
+    // 所有矩形都被擦除时才删除这条批注；否则保留同一条批注的剩余部分。
+    return rects.length ? [{ ...item, rects }] : [];
+  });
+  await writeJson(ANNOTATIONS_FILE, annotations);
+  return json(res, 200, { changed, annotations: annotations[paperId] });
+}
+
 async function servePdf(res, fileName, req) {
   const safeName = path.basename(fileName);
   if (!safeName.toLowerCase().endsWith(".pdf")) return json(res, 404, { error: "PDF not found" });
@@ -889,6 +916,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/papers/import" && req.method === "POST") return importPaper(res, req);
     if (url.pathname === "/api/annotations" && req.method === "GET") return listAnnotations(res, url);
     if (url.pathname === "/api/annotations" && req.method === "POST") return saveAnnotation(res, await readBody(req));
+    if (url.pathname === "/api/annotations/update" && req.method === "POST") return updateAnnotationRects(res, await readBody(req));
     if (url.pathname === "/api/annotations/delete" && req.method === "POST") return deleteAnnotations(res, await readBody(req));
     if (url.pathname === "/api/vocab" && req.method === "GET") return json(res, 200, { words: await readJson(VOCAB_FILE, []) });
     if (url.pathname === "/api/vocab/export" && req.method === "POST") {

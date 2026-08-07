@@ -317,6 +317,18 @@ function switchView(view) {
   $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   els.topbarContext.textContent = view === "library" ? "论文库" : view === "vocabulary" ? "生词本" : "正在阅读";
   window.scrollTo({ top: 0, behavior: "instant" });
+  syncReaderViewport();
+}
+
+// 双指缩放会改变实际可见的 visualViewport；固定工具必须跟随它，
+// 才不会被放大的页面裁到屏幕外。
+function syncReaderViewport() {
+  const viewport = window.visualViewport;
+  const root = document.documentElement.style;
+  root.setProperty("--reader-viewport-width", `${viewport?.width || window.innerWidth}px`);
+  root.setProperty("--reader-viewport-height", `${viewport?.height || window.innerHeight}px`);
+  root.setProperty("--reader-viewport-left", `${viewport?.offsetLeft || 0}px`);
+  root.setProperty("--reader-viewport-top", `${viewport?.offsetTop || 0}px`);
 }
 
 async function openReader(paperId) {
@@ -735,27 +747,52 @@ function rectsOverlap(first, second) {
     && first.top + first.height > second.top;
 }
 
+function trimAnnotationRect(source, eraser) {
+  if (!rectsOverlap(source, eraser)) return [source];
+  const sourceRight = source.left + source.width;
+  const sourceBottom = source.top + source.height;
+  const eraseRight = eraser.left + eraser.width;
+  const eraseBottom = eraser.top + eraser.height;
+  const cutLeft = Math.max(source.left, eraser.left);
+  const cutTop = Math.max(source.top, eraser.top);
+  const cutRight = Math.min(sourceRight, eraseRight);
+  const cutBottom = Math.min(sourceBottom, eraseBottom);
+  const fragments = [
+    { ...source, height: cutTop - source.top },
+    { ...source, top: cutBottom, height: sourceBottom - cutBottom },
+    { ...source, top: cutTop, width: cutLeft - source.left, height: cutBottom - cutTop },
+    { ...source, left: cutRight, top: cutTop, width: sourceRight - cutRight, height: cutBottom - cutTop },
+  ];
+  // 过滤掉不足一个像素的碎片，避免留下难以看见、也难以再次擦除的残点。
+  return fragments.filter((rect) => rect.width > 0.001 && rect.height > 0.001);
+}
+
 async function eraseAnnotationsFromSelection(selected) {
   const rects = annotationRectsForRange(selected.range);
   if (!rects.length || !state.currentPaper) {
     showToast("先选中要擦除的批注");
     return;
   }
-  const ids = state.annotations
-    .filter((annotation) => annotation.rects?.some((savedRect) => rects.some((rect) => rectsOverlap(savedRect, rect))))
-    .map((annotation) => annotation.id);
-  if (!ids.length) {
+  const updates = state.annotations.map((annotation) => {
+    let changed = false;
+    const remainingRects = (annotation.rects || []).flatMap((savedRect) => rects.reduce((fragments, eraserRect) => {
+      if (fragments.some((fragment) => rectsOverlap(fragment, eraserRect))) changed = true;
+      return fragments.flatMap((fragment) => trimAnnotationRect(fragment, eraserRect));
+    }, [savedRect]));
+    return changed ? { id: annotation.id, rects: remainingRects } : null;
+  }).filter(Boolean);
+  if (!updates.length) {
     showToast("这段没有批注");
     return;
   }
-  const payload = await requestJson("/api/annotations/delete", {
+  const payload = await requestJson("/api/annotations/update", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ paperId: state.currentPaper.fileName, ids }),
+    body: JSON.stringify({ paperId: state.currentPaper.fileName, updates }),
   });
-  state.annotations = payload.annotations || state.annotations.filter((annotation) => !ids.includes(annotation.id));
+  state.annotations = payload.annotations || state.annotations;
   renderAllAnnotations();
-  showToast(`已擦除 ${ids.length} 条批注`);
+  showToast(`已精细擦除 ${updates.length} 处批注`);
 }
 
 async function handleAnnotationSelection(selected) {
@@ -1097,6 +1134,24 @@ function highlightSearchMatch(match) {
   });
 }
 
+function locateSearchMatch(match) {
+  const layer = match.span.closest(".textLayer");
+  const page = match.span.closest(".pdf-page");
+  if (!layer || !page) return false;
+  const targetRect = match.span.getBoundingClientRect();
+  const scrollRect = els.pdfScroll.getBoundingClientRect();
+  // 用目标文字相对阅读滚动区的实时坐标定位，不能使用 page.offsetTop：
+  // 它相对的是外层定位容器，缩放或固定顶栏时会产生偏差。
+  const top = Math.max(0, els.pdfScroll.scrollTop + targetRect.top - scrollRect.top - 118);
+  els.pdfScroll.scrollTo({ top, behavior: "smooth" });
+  highlightSearchMatch(match);
+  page.classList.remove("search-target-page");
+  void page.offsetWidth;
+  page.classList.add("search-target-page");
+  window.setTimeout(() => page.classList.remove("search-target-page"), 1250);
+  return true;
+}
+
 function collectSearchMatches(query) {
   const matches = [];
   $$(".textLayer span").forEach((span) => {
@@ -1149,9 +1204,7 @@ function renderSearchResults(query, matches, result, error = "") {
     button.addEventListener("click", () => {
       const match = state.searchMatches[Number(button.dataset.searchIndex)];
       if (!match) return;
-      const page = match.span.closest(".pdf-page");
-      if (page) els.pdfScroll.scrollTo({ top: Math.max(0, page.offsetTop - 100), behavior: "smooth" });
-      window.setTimeout(() => highlightSearchMatch(match), 160);
+      if (!locateSearchMatch(match)) showToast("该位置暂时未加载完成，请稍后再试");
     });
   });
 }
@@ -1317,8 +1370,11 @@ document.addEventListener("mouseup", (event) => {
 });
 
 window.addEventListener("resize", () => {
+  syncReaderViewport();
   if (!els.explainPopover.classList.contains("hidden") && state.currentSelection) positionPopover(state.currentSelection.rect);
 });
+window.visualViewport?.addEventListener("resize", syncReaderViewport);
+window.visualViewport?.addEventListener("scroll", syncReaderViewport);
 
 $$('.nav-item').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 $("#open-current").addEventListener("click", () => state.papers[0] && openReader(state.papers[0].id));
@@ -1450,6 +1506,7 @@ updateModeUI();
 updateAnnotationUI();
 updateReaderZoomUI();
 updateLibraryLayoutUI();
+syncReaderViewport();
 els.modeGate?.classList.add("hidden");
 loadLibrary().catch((error) => {
   els.paperGrid.innerHTML = `<div class="empty-state">无法连接论文库：${escapeHtml(error.message)}</div>`;
