@@ -16,6 +16,16 @@ curl -fsSL https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-
 
 安装后应用位于 `~/Applications/墨读/墨读.app`。此安装器目前只支持 macOS。
 
+### Windows 一键安装
+
+在 Windows 10/11 中以普通方式打开 PowerShell，粘贴下面这一条命令。它会下载、配置离线资源，并在桌面创建“墨读”快捷方式；若缺少 Node.js 或 Python，会通过 `winget` 自动安装。
+
+```powershell
+irm https://raw.githubusercontent.com/yizego1-star/mo-reader/agent/local-sentence-translation/install-windows.ps1 | iex
+```
+
+安装后文件位于 `%LOCALAPPDATA%\墨读`，以后双击桌面“墨读”即可启动。
+
 ```bash
 npm install
 python3 -m pip install -r requirements.txt
